@@ -182,6 +182,22 @@
 
     </div>
 
+    <!-- App-owned dialog for alerts, confirmations, and text input -->
+    <div class="app-dialog-overlay" id="appDialogOverlay" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
+        <div class="app-dialog-card">
+            <h3 class="app-dialog-title" id="appDialogTitle"></h3>
+            <div class="app-dialog-message" id="appDialogMessage"></div>
+            <div class="app-dialog-input-wrap" id="appDialogInputWrap">
+                <input class="form-input app-dialog-input" id="appDialogInput" type="text">
+            </div>
+            <div class="app-dialog-actions">
+                <button class="btn btn-secondary" id="appDialogSecondary" type="button"></button>
+                <button class="btn btn-primary" id="appDialogPrimary" type="button"></button>
+            </div>
+            <button class="app-dialog-close" id="appDialogClose" type="button" aria-label="Закрыть">×</button>
+        </div>
+    </div>
+
     <!-- ═══ Bottom Tab Bar ═══ -->
     <div class="tab-bar" id="tabBar" style="display:none">
         <button class="tab" data-tab="home" onclick="showHome()">

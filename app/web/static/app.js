@@ -28,80 +28,117 @@ const state = {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// Telegram PopUp API (замена нативных confirm/prompt)
-//
-// Нативные confirm()/prompt() НЕ работают в Telegram WebView — диалог
-// не показывается, функция молча возвращает false. Используем
-// window.Telegram.WebApp.showPopup / showAlert, с fallback на
-// confirm/prompt вне Telegram (браузер/dev).
+// App-owned dialogs (VK must not use browser alert/confirm/prompt)
 // ═══════════════════════════════════════════════════════════════
 
-function tgShowPopup(title, message, buttons) {
-    // buttons: [{id, type, text}] — type: default/ok/cancel/close/destructive
+let appDialogState = null;
+
+function closeAppDialog(result) {
+    if (!appDialogState || appDialogState.done) return;
+    const dialog = appDialogState;
+    dialog.done = true;
+    if (dialog.cleanup) dialog.cleanup();
+    const overlay = document.getElementById("appDialogOverlay");
+    if (overlay) overlay.classList.remove("active");
+    appDialogState = null;
+    if (dialog.previousFocus && dialog.previousFocus.focus) dialog.previousFocus.focus();
+    dialog.resolve(result);
+}
+
+function openAppDialog({ mode = "alert", title = "TicketBot", message = "", defaultValue = "", primaryText = "ОК", secondaryText = "Отмена" }) {
+    if (appDialogState) closeAppDialog(mode === "confirm" || mode === "prompt" ? null : undefined);
+    const overlay = document.getElementById("appDialogOverlay");
+    const titleEl = document.getElementById("appDialogTitle");
+    const messageEl = document.getElementById("appDialogMessage");
+    const inputWrap = document.getElementById("appDialogInputWrap");
+    const input = document.getElementById("appDialogInput");
+    const primary = document.getElementById("appDialogPrimary");
+    const secondary = document.getElementById("appDialogSecondary");
+    const close = document.getElementById("appDialogClose");
+    if (!overlay || !titleEl || !messageEl || !inputWrap || !input || !primary || !secondary || !close) {
+        return Promise.resolve(mode === "confirm" ? false : mode === "prompt" ? null : undefined);
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    inputWrap.classList.toggle("active", mode === "prompt");
+    input.value = defaultValue || "";
+    input.setAttribute("aria-hidden", mode === "prompt" ? "false" : "true");
+    primary.textContent = primaryText;
+    secondary.textContent = secondaryText;
+    primary.className = "btn btn-primary" + (mode === "confirm" ? " app-dialog-destructive" : "");
+    secondary.classList.toggle("active", mode !== "alert");
+    close.classList.toggle("active", mode === "alert");
+    overlay.classList.add("active");
+
     return new Promise(resolve => {
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg && tg.showPopup) {
-            tg.showPopup({
-                title: title || "TicketBot",
-                message: message || "",
-                buttons: buttons || [{ type: "close" }],
-            }, (buttonId) => resolve(buttonId));
-        } else {
-            // fallback: последняя кнопка = подтверждение
-            const last = buttons && buttons.length ? buttons[buttons.length - 1] : null;
-            resolve(last ? last.id : null);
-        }
+        const previousFocus = document.activeElement;
+        const dialog = { resolve, previousFocus, done: false, cleanup: null };
+        const finish = value => closeAppDialog(value);
+        const onKeydown = event => {
+            if (event.key === "Escape") finish(mode === "confirm" || mode === "prompt" ? null : undefined);
+            else if (event.key === "Enter" && mode === "prompt" && document.activeElement === input) finish(input.value);
+        };
+        const onBackdrop = event => {
+            if (event.target === overlay && mode !== "prompt") finish(mode === "confirm" ? false : undefined);
+        };
+        primary.onclick = () => finish(mode === "prompt" ? input.value : mode === "confirm" ? true : undefined);
+        secondary.onclick = () => finish(mode === "confirm" || mode === "prompt" ? (mode === "confirm" ? false : null) : undefined);
+        close.onclick = () => finish(undefined);
+        overlay.addEventListener("click", onBackdrop);
+        document.addEventListener("keydown", onKeydown);
+        dialog.cleanup = () => {
+            overlay.removeEventListener("click", onBackdrop);
+            document.removeEventListener("keydown", onKeydown);
+            primary.onclick = null;
+            secondary.onclick = null;
+            close.onclick = null;
+        };
+        appDialogState = dialog;
+        if (mode === "prompt") setTimeout(() => input.focus(), 0);
+        else primary.focus();
     });
+}
+
+function tgShowPopup(title, message, buttons) {
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg && tg.showPopup) {
+        return new Promise(resolve => tg.showPopup({
+            title: title || "TicketBot", message: message || "",
+            buttons: buttons || [{ type: "close" }],
+        }, resolve));
+    }
+    const isConfirm = (buttons || []).some(button => button.type === "cancel");
+    return openAppDialog({ mode: isConfirm ? "confirm" : "alert", title, message });
 }
 
 function tgConfirm(message, okText = "OK", cancelText = "Отмена") {
-    return new Promise(resolve => {
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg && tg.showPopup) {
-            tg.showPopup({
-                title: "Подтверждение",
-                message: message,
-                buttons: [
-                    { id: "cancel", type: "cancel", text: cancelText },
-                    { id: "ok", type: "ok", text: okText },
-                ],
-            }, (buttonId) => resolve(buttonId === "ok"));
-        } else {
-            // Вне Telegram — нативный confirm
-            resolve(window.confirm(message));
-        }
-    });
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg && tg.showPopup) {
+        return new Promise(resolve => tg.showPopup({
+            title: "Подтверждение", message,
+            buttons: [
+                { id: "cancel", type: "cancel", text: cancelText },
+                { id: "ok", type: "ok", text: okText },
+            ],
+        }, buttonId => resolve(buttonId === "ok")));
+    }
+    return openAppDialog({ mode: "confirm", title: "Подтверждение", message, primaryText: okText, secondaryText: cancelText });
 }
 
 function tgPrompt(message, defaultValue = "") {
-    return new Promise(resolve => {
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg && tg.showPopup) {
-            // Telegram PopUp не поддерживает ввод текста. Показываем подсказку,
-            // что ввод через popup невозможен — возвращаем null (отмена).
-            tg.showPopup({
-                title: "Ввод не поддерживается",
-                message: message + "\n\nВвод текста недоступен в Telegram Mini App. " +
-                    "Пожалуйста, используйте поле ввода рядом.",
-                buttons: [{ id: "close", type: "close", text: "Ок" }],
-            }, () => resolve(null));
-        } else {
-            resolve(window.prompt(message, defaultValue));
-        }
-    });
+    // Telegram Popup не поддерживает ввод текста; app-dialog работает одинаково на всех платформах.
+    return openAppDialog({ mode: "prompt", title: "Ввод", message, defaultValue, primaryText: "Готово" });
 }
 
 function tgAlert(message) {
-    return new Promise(resolve => {
-        const tg = window.Telegram && window.Telegram.WebApp;
-        if (tg && tg.showAlert) {
-            tg.showAlert({ message: message }, () => resolve());
-        } else {
-            window.alert(message);
-            resolve();
-        }
-    });
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg && tg.showAlert) {
+        return new Promise(resolve => tg.showAlert({ message }, resolve));
+    }
+    return openAppDialog({ mode: "alert", title: "TicketBot", message });
 }
+
 
 // ─── Init ───────────────────────────────────────────────────────
 
@@ -447,7 +484,7 @@ function acceptTerms() {
 function renderTerms() {
     const links = document.querySelectorAll(".terms-link");
     links.forEach(link => {
-        link.addEventListener("click", (e) => {
+        link.onclick = async (e) => {
             e.preventDefault();
             const type = link.getAttribute("data-terms");
             const text = type === "user_agreement"
@@ -455,8 +492,18 @@ function renderTerms() {
                 : (isVKMode()
                     ? "Политика конфиденциальности: сервис обрабатывает идентификатор пользователя, имя и данные билетов для продажи билетов и работы функций организатора. Данные, необходимые для публикации в сообществах VK, хранятся в защищённом виде. Вы можете удалить аккаунт в любое время."
                     : "Политика конфиденциальности: сервис обрабатывает данные (идентификатор VK/Telegram, имя, билеты) для продажи билетов и работы функций организатора. Токены доступа VK-групп хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.");
-            tgAlert(text);
-        });
+            await tgAlert(text);
+        };
+        link.removeAttribute("href");
+        link.setAttribute("role", "button");
+        link.setAttribute("tabindex", "0");
+        link.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") link.click();
+        };
+        link.replaceWith(link.cloneNode(true));
+        const freshLink = document.querySelector(`.terms-link[data-terms="${link.getAttribute("data-terms")}"]`);
+        freshLink.onclick = link.onclick;
+        freshLink.onkeydown = link.onkeydown;
     });
 }
 
@@ -469,7 +516,8 @@ function renderSupport() {
         return `
             <div class="support-block">
                 <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
-                <p class="hint" style="margin:0">Раздел помощи доступен в приложении.</p>
+                <p class="hint" style="margin:0 0 8px">Вопросы, замечания, помощь с покупкой билетов:</p>
+                <a class="btn btn-secondary" href="https://vk.ru/club241015257" target="_blank" rel="noopener">💬 Сообщество VK</a>
             </div>`;
     }
     return `
@@ -543,7 +591,7 @@ function renderProfile() {
             <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
     }
 
-    const identifierLabel = isVKMode() ? "Идентификатор пользователя" : "Telegram ID";
+    const identifierLabel = "ID пользователя";
     document.getElementById("profileContent").innerHTML = `
         <div class="profile-card">
             ${avatarHtml}
@@ -724,7 +772,7 @@ async function adminListUserSubscribe(userId) {
 
 async function editName() {
     const me = state.me;
-    const newName = prompt("Ваше имя:", me.name || "");
+    const newName = await tgPrompt("Ваше имя:", me.name || "");
     if (newName === null) return;  // отмена
     const name = newName.trim();
     if (!name) { showToast("Имя не может быть пустым", true); return; }
@@ -1766,7 +1814,7 @@ async function copyInviteLink(code) {
 }
 
 async function adminIssueInvitePrompt(eventId) {
-    const seats = prompt("Вместимость пригласительного (1/2/3 человека):", "1");
+    const seats = await tgPrompt("Вместимость пригласительного (1/2/3 человека):", "1");
     if (!seats) return;
     const n = parseInt(seats, 10);
     if (n < 1 || n > 3) { showToast("Вместимость: 1, 2 или 3", true); return; }
@@ -2267,9 +2315,9 @@ function renderAdminChannels(channels) {
 }
 
 async function adminSubscribePrompt(channelId) {
-    const days = prompt("Срок подписки (дней):", "30");
+    const days = await tgPrompt("Срок подписки (дней):", "30");
     if (!days) return;
-    const tier = prompt("Тариф (basic/pro):", "basic") === "pro" ? "pro" : "basic";
+    const tier = (await tgPrompt("Тариф (basic/pro):", "basic")) === "pro" ? "pro" : "basic";
     try {
         await api(`/api/admin/channels/${channelId}/subscribe`, {
             method: "POST",
@@ -2291,7 +2339,7 @@ async function adminUnsubscribe(channelId) {
 }
 
 async function adminChangeAdminPrompt(channelId) {
-    const newId = prompt("Telegram ID нового админа:");
+    const newId = await tgPrompt("Telegram ID нового админа:");
     if (!newId) return;
     try {
         await api(`/api/admin/channels/${channelId}/change_admin`, {
@@ -2513,7 +2561,7 @@ async function createVKLinkCode() {
 }
 
 async function linkVKByCode() {
-    const code = prompt("Код привязки из Telegram:");
+    const code = await tgPrompt("Код привязки из Telegram:");
     if (!code) return;
     try {
         const res = await api("/api/me/link", {
@@ -2571,12 +2619,12 @@ function renderAdminStats(s) {
 // ─── Добавить канал (super-admin) ─────────────────────────────
 
 async function adminAddChannelPrompt() {
-    const telegramChannelId = prompt("Telegram ID канала (@username или числовой):");
+    const telegramChannelId = await tgPrompt("Telegram ID канала (@username или числовой):");
     if (!telegramChannelId) return;
-    const days = prompt("Срок подписки (дней):", "30");
+    const days = await tgPrompt("Срок подписки (дней):", "30");
     if (!days) return;
-    const tier = prompt("Тариф (basic/pro):", "basic") === "pro" ? "pro" : "basic";
-    const title = prompt("Название (необязательно):", "") || null;
+    const tier = (await tgPrompt("Тариф (basic/pro):", "basic")) === "pro" ? "pro" : "basic";
+    const title = await tgPrompt("Название (необязательно):", "") || null;
     try {
         await api("/api/admin/channels", {
             method: "POST",

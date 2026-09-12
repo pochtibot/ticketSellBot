@@ -285,8 +285,8 @@ def test_vk_mode_has_platform_scoped_copy_and_profile():
     """VK-контур должен иметь отдельные platform-safe ветки."""
     assert "isVKMode" in APP_JS
     assert "внутри VK" in APP_JS
-    assert "Идентификатор пользователя" in APP_JS
-    assert "Раздел помощи доступен в приложении" in APP_JS
+    assert "ID пользователя" in APP_JS
+    assert "https://vk.ru/club241015257" in APP_JS
     assert "createVKLinkCode" in APP_JS
     assert "Telegram ID" in APP_JS
     assert "https://t.me/aerovir" in APP_JS
@@ -330,9 +330,15 @@ def test_vk_profile_does_not_unconditionally_render_external_support():
     support_end = APP_JS.index("\nfunction renderOrganizerSections", support_start)
     support_body = APP_JS[support_start:support_end]
     assert "isVKMode()" in support_body
-    assert "Раздел помощи доступен в приложении" in support_body
+    assert "https://vk.ru/club241015257" in support_body
     assert "https://t.me/aerovir" in support_body
     assert "mailto:aerovir@mail.ru" in support_body
+
+    vk_start = support_body.index("if (isVKMode())")
+    vk_body = support_body[vk_start:support_body.index("    }\n    return `", vk_start)]
+    assert "https://vk.ru/club241015257" in vk_body
+    assert "https://t.me/aerovir" not in vk_body
+    assert "mailto:aerovir@mail.ru" not in vk_body
 
 
 def test_admin_binary_downloads_use_platform_auth_headers():
@@ -357,3 +363,48 @@ def test_telegram_profile_contract_is_preserved():
     assert "https://t.me/aerovir" in APP_JS
     assert "mailto:aerovir@mail.ru" in APP_JS
     assert "createVKLinkCode" in APP_JS
+
+
+def test_both_shells_have_app_dialog_host():
+    """All platform dialogs must be rendered by the app, not the browser."""
+    for shell in (INDEX, VK_APP):
+        for element_id in (
+            'id="appDialogOverlay"', 'id="appDialogTitle"',
+            'id="appDialogMessage"', 'id="appDialogInput"',
+            'id="appDialogPrimary"', 'id="appDialogSecondary"',
+            'id="appDialogClose"',
+        ):
+            assert element_id in shell
+
+
+def test_vk_dialog_helpers_use_dom_and_no_direct_prompts_remain():
+    """VK must use app dialogs for alert/confirm/prompt interactions."""
+    assert "openAppDialog" in APP_JS
+    assert "isVKMode()" in APP_JS
+    assert "window.alert(" not in APP_JS
+    assert "window.confirm(" not in APP_JS
+    assert "window.prompt(" not in APP_JS
+    # Application handlers must use the shared async prompt helper.
+    assert "await tgPrompt(" in APP_JS
+    assert "const newName = await tgPrompt" in APP_JS
+    assert "const seats = await tgPrompt" in APP_JS
+
+
+def test_vk_terms_open_in_app_dialog():
+    """Viewing onboarding terms must not invoke a browser alert."""
+    terms_start = APP_JS.index("function renderTerms")
+    terms_end = APP_JS.index("\nfunction platformUserId", terms_start)
+    terms_body = APP_JS[terms_start:terms_end]
+    assert "await tgAlert(text)" in terms_body
+    assert "openAppDialog" in APP_JS
+    assert "window.alert" not in terms_body
+
+
+def test_dialog_styles_cover_vk_themes():
+    """App dialog has themed overlay/card/actions and active state."""
+    for selector in (".app-dialog-overlay", ".app-dialog-overlay.active",
+                      ".app-dialog-card", ".app-dialog-message",
+                      ".app-dialog-actions"):
+        assert selector in STYLES
+    assert "vk-theme-dark" in STYLES
+    assert "vk-theme-light" in STYLES

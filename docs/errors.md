@@ -1328,6 +1328,27 @@
 
 ---
 
+## 082 — VK Mini App использует браузерные диалоги вместо элементов интерфейса
+
+- **Дата:** 2026-09-12
+- **Статус:** ✅ Исправлено
+- **Описание:** При просмотре пользовательского соглашения или политики на первом входе в VK Mini App открывается браузерный `alert`. Аналогично подтверждения и ввод данных могут использовать браузерные `confirm`/`prompt`, что не соответствует требованиям модерации VK об использовании элементов интерфейса самого сервиса.
+- **Анализ (причина подтверждена чтением кода):**
+  - `app/web/static/app.js:94-103` функция `tgAlert()` вызывает `window.alert()` при отсутствии Telegram WebApp SDK; в VK shell SDK намеренно не подключается.
+  - `app/web/static/app.js:57-73` функция `tgConfirm()` в том же VK fallback вызывает `window.confirm()`.
+  - `app/web/static/app.js:76-91` функция `tgPrompt()` и прикладные обработчики используют `window.prompt()`; в частности, `renderTerms()` на `app.js:447-461` вызывает `tgAlert()` при клике по документам onboarding.
+  - В результате VK-контур показывает системные браузерные диалоги вместо DOM-элементов приложения.
+- **Исправление (применено):**
+  - `app/web/static/index.html` и `app/web/static/vk-app.html`: добавлен общий app-owned DOM-диалог для alert/confirm/prompt.
+  - `app/web/static/styles.css`: добавлены themed overlay/card/input/actions с `.active`-паттерном.
+  - `app/web/static/app.js`: добавлен singleton `openAppDialog()`/`closeAppDialog()`; `tgAlert()`/`tgConfirm()`/`tgPrompt()` используют его без браузерных dialog API; обработчики условий, имени, приглашений, подписок, линковки и каналов переведены на async helper.
+  - `tests/test_frontend.py`: добавлены регрессионные проверки DOM-хоста, отсутствия native dialog API и стилей.
+- **Проверка:** `pytest -q tests/test_frontend.py` — 40 passed; `node --check app/web/static/app.js` — успешно; поиск native calls нашёл только комментарий.
+- **Связанные задачи:** #222.
+- **Коммит:** — (изменения ожидают ревью)
+
+---
+
 ## 081 — VK Mini App отклонён модерацией: ссылки и сведения о других площадках
 
 - **Дата:** 2026-09-01
