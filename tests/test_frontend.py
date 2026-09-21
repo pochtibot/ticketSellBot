@@ -250,6 +250,15 @@ def test_styles_minimalism():
     assert ".event-poster" in STYLES
 
 
+def test_profile_tab_has_navigation_handler():
+    """Вкладка «Я» должна вести на профиль в обоих Mini App shell."""
+    for shell in (INDEX, VK_APP):
+        assert 'data-tab="me" onclick="showProfile()"' in shell
+    assert "function showProfile" in APP_JS
+    assert 'showPage("profile")' in APP_JS
+    assert "renderProfile()" in APP_JS
+
+
 # ─── Матрица ролей: ролевое меню и ЛК ──────────────────────────
 
 

@@ -609,6 +609,27 @@ function renderProfile() {
     `;
 }
 
+async function showProfile() {
+    state.lastAction = "showProfile";
+    setActiveTab("me");
+    updateToolbar("Я", false, false);
+    showPage("profile");
+
+    if (!state.me) {
+        showLoading();
+        try {
+            await loadMe();
+        } catch (e) {
+            hideLoading();
+            showError("Не удалось загрузить профиль");
+            return;
+        }
+        hideLoading();
+    }
+
+    renderProfile();
+}
+
 function renderTabBar() {
     const bar = document.getElementById("tabBar");
     if (!bar || !state.me) {

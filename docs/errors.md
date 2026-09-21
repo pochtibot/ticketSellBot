@@ -1370,3 +1370,18 @@
 - **Проверка:** `tests/test_frontend.py` + `tests/test_web_api.py` — 188 passed; полный набор `pytest` — 540 passed, 3 warnings. `node --check app/web/static/app.js` и `py_compile` — успешно.
 - **Связанные ошибки:** #063, #064, #080.
 - **Коммит:** — (ветка `feature/vk-moderation-isolation`, ожидает ревью)
+
+---
+
+## 083 — Вкладка «Я» не открывает профиль
+
+- **Дата:** 2026-09-21
+- **Статус:** ✅ Исправлено
+- **Описание:** При нажатии на вкладку «Я» в Telegram Mini App или VK Mini App профиль не открывался. Логи/traceback от пользователя не предоставлены; причина установлена чтением текущего frontend-кода.
+- **Причина (подтверждено: `app/web/static/index.html:215-218`, `app/web/static/vk-app.html:215-218`, `app/web/static/app.js:565-610`):** кнопка вкладки вызывала глобальную функцию `showProfile()`, но такая функция отсутствовала в `app.js`. При этом функция `renderProfile()` и страница `page-profile` существовали. Нажатие останавливалось на `ReferenceError: showProfile is not defined` до вызова `setActiveTab`, `showPage("profile")` и `renderProfile()`.
+- **Дополнительное проявление:** такой же вызов отсутствующей `showProfile()` был после VK-привязки в `app/web/static/app.js:2573-2575`.
+- **Пробел в тестах:** `tests/test_frontend.py` проверял наличие контейнера профиля, но не проверял связку `onclick="showProfile()"` → объявление функции → переход на `page-profile`.
+- **Исправление:** в `app/web/static/app.js` добавлена асинхронная `showProfile()`: она переключает вкладку и страницу, загружает профиль при отсутствии `state.me`, показывает app-owned ошибку и вызывает `renderProfile()`. Реализация не использует Telegram SDK, внешние ссылки или браузерные диалоги, поэтому сохраняет VK-изоляцию.
+- **Тесты:** добавлен `test_profile_tab_has_navigation_handler` в `tests/test_frontend.py`; `python3 -m pytest tests/test_frontend.py::test_profile_tab_has_navigation_handler -q` — `1 passed`; `node --check app/web/static/app.js` — успешно. Полный Docker-тест не запустился: текущий контейнер не содержит dev-зависимости, а их установка заблокирована отсутствием сетевого доступа; дополнительно обычный compose override содержит устаревший сервис `app`.
+- **Коммит:** — (изменения ожидают ревью).
+- **Связанные ошибки:** нет.
