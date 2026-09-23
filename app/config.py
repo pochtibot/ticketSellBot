@@ -15,7 +15,12 @@ class Settings(BaseSettings):
     vk_app_id: Optional[int] = None      # App ID VK Mini App (для проверки sign)
     vk_secret_key: Optional[str] = None  # Секретный ключ VK приложения (для подписи launch params)
     vk_token_encryption_key: Optional[str] = None  # Fernet-ключ для шифрования community token VK-групп
-
+    vk_pay_enabled: bool = False
+    vk_pay_merchant_id: Optional[str] = None
+    vk_pay_client_id: Optional[str] = None
+    vk_pay_app_secure_key: Optional[str] = None
+    vk_pay_merchant_private_key: Optional[str] = None
+    vk_pay_notification_public_key: Optional[str] = None
     # MAX
     max_token: Optional[str] = None
 

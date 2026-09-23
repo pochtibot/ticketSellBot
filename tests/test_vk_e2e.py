@@ -191,7 +191,7 @@ async def test_vk_buy_refund_sync_to_tg(db_client, db_session):
         json={
             "title": "Синхронизация VK↔TG",
             "date": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-            "price": 100,
+            "price": 0,
             "total_tickets": 10,
             "channel_id": None,
             "owner_user_id": str(org.id),

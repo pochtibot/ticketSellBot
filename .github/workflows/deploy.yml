@@ -74,6 +74,12 @@ jobs:
           VK_APP_ID=${{ secrets.VK_APP_ID }}
           VK_SECRET_KEY=${{ secrets.VK_SECRET_KEY }}
           VK_TOKEN_ENCRYPTION_KEY=${{ secrets.VK_TOKEN_ENCRYPTION_KEY }}
+          VK_PAY_ENABLED=${{ secrets.VK_PAY_ENABLED || 'false' }}
+          VK_PAY_MERCHANT_ID=${{ secrets.VK_PAY_MERCHANT_ID }}
+          VK_PAY_CLIENT_ID=${{ secrets.VK_PAY_CLIENT_ID }}
+          VK_PAY_APP_SECURE_KEY=${{ secrets.VK_PAY_APP_SECURE_KEY }}
+          VK_PAY_MERCHANT_PRIVATE_KEY=${{ secrets.VK_PAY_MERCHANT_PRIVATE_KEY }}
+          VK_PAY_NOTIFICATION_PUBLIC_KEY=${{ secrets.VK_PAY_NOTIFICATION_PUBLIC_KEY }}
           DEBUG=false
           ENVEOF
           echo "✅ .env.telegram создан"
@@ -238,6 +244,37 @@ jobs:
             -- Динамические цены по дате (миграция 0013)
             ALTER TABLE events ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
             ALTER TABLE payments ADD COLUMN IF NOT EXISTS price_range_label VARCHAR(64);
+
+            -- VK Pay settlement references and pending reservations (migration 0016)
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider VARCHAR(32);
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_order_id VARCHAR(128);
+            ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(128);
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_payments_provider_order_id ON payments(provider_order_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_payments_provider_transaction_id ON payments(provider_transaction_id);
+            CREATE TABLE IF NOT EXISTS vk_pay_orders (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                issuer_id VARCHAR(128) NOT NULL UNIQUE,
+                event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                platform_user_id VARCHAR(255) NOT NULL,
+                amount NUMERIC(10,2) NOT NULL,
+                base_amount NUMERIC(10,2) NOT NULL,
+                discount_amount NUMERIC(10,2) NOT NULL DEFAULT 0,
+                promo_code_id UUID REFERENCES promo_codes(id) ON DELETE SET NULL,
+                promo_code VARCHAR(64),
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                provider_transaction_id VARCHAR(128) UNIQUE,
+                ticket_id UUID REFERENCES tickets(id) ON DELETE SET NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                settled_at TIMESTAMPTZ
+            );
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_orders_event_id ON vk_pay_orders(event_id);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_orders_user_id ON vk_pay_orders(user_id);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_orders_expires_at ON vk_pay_orders(expires_at);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_order_event_status_expires ON vk_pay_orders(event_id, status, expires_at);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_order_promo_status_expires ON vk_pay_orders(promo_code_id, status, expires_at);
+
             CREATE TABLE IF NOT EXISTS event_price_ranges (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,

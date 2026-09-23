@@ -1,20 +1,25 @@
 """
 REST API endpoints for Telegram Mini App.
 
-All endpoints (except health) require initData validation.
+User-facing endpoints require platform initData validation. VK Pay notifications use VK's signed merchant callback protocol.
 """
 
 import csv
 import io
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from urllib.parse import parse_qs
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 
+from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import PlatformType, Event
+from app.core.models import PlatformType, Event, VKPayOrder
+from app.core.vk_pay_service import VKPayOrderService
 from app.core.qr import generate_qr_png
 from app.core.schemas import (
     AddManagerIn,
@@ -60,6 +65,14 @@ from app.platforms.telegram.formatting import format_event_text
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import post_to_group_wall, verify_group_token, send_vk_ticket_dm
+from app.web.vk_pay import (
+    VK_PAY_NOTIFICATION_VERSION,
+    build_notification_ack,
+    build_open_pay_form_params,
+    decode_notification,
+    is_valid_notification_public_key,
+    verify_notification_signature,
+)
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
@@ -106,6 +119,7 @@ async def list_events(
         # Актуальная цена по дате (динамические цены) — батч-загрузка диапазонов
         now = datetime.now(timezone.utc)
         ranges_map = await svc.price_ranges_map([e.id for e in events])
+        reserved_map = await VKPayOrderService(session).reserved_seats_map([e.id for e in events], now)
 
     return [
         {
@@ -114,7 +128,7 @@ async def list_events(
             "date": e.date.isoformat(),
             "location": e.location,
             "price": EventService.resolve_price(ranges_map.get(e.id), e, now),
-            "available_tickets": e.available_tickets,
+            "available_tickets": max(0, e.available_tickets - reserved_map.get(e.id, 0)),
             "total_tickets": e.total_tickets,
             "age_restriction": e.age_restriction,
             "media_file_id": e.media_telegram_file_id,
@@ -145,6 +159,7 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         now = datetime.now(timezone.utc)
         ranges_map = await svc.price_ranges_map([uid])
         effective_price = EventService.resolve_price(ranges_map.get(uid), event, now)
+        reserved = (await VKPayOrderService(session).reserved_seats_map([uid], now)).get(uid, 0)
 
     return {
         "id": str(event.id),
@@ -153,7 +168,7 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         "date": event.date.isoformat(),
         "location": event.location,
         "price": effective_price,
-        "available_tickets": event.available_tickets,
+        "available_tickets": max(0, event.available_tickets - reserved),
         "total_tickets": event.total_tickets,
         "is_active": event.is_active,
         "age_restriction": event.age_restriction,
@@ -236,6 +251,19 @@ async def buy_ticket(
     name = user_data.get("first_name", "")
 
     async with async_session_factory() as session:
+        # Paid VK tickets must use the provider-backed order flow; never allow the
+        # legacy immediate-success path to be called directly instead of the UI.
+        if auth_data.get("platform") == "vk":
+            event = await EventService(session).get_by_id(uid)
+            if event is not None:
+                now = datetime.now(timezone.utc)
+                ranges = await EventService(session).price_ranges_map([uid])
+                if EventService.resolve_price(ranges.get(uid), event, now) > 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Платные билеты во VK оформляются только через VK Pay",
+                    )
+
         # Get/create user
         user_svc = UserService(session)
         user = await user_svc.get_or_create(
@@ -285,6 +313,201 @@ async def buy_ticket(
         except ValueError as e:
             await session.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+def _vk_pay_ack(transaction_id: str, notification: str) -> JSONResponse:
+    return JSONResponse(build_notification_ack(
+        transaction_id=transaction_id,
+        client_id=settings.vk_pay_client_id,
+        merchant_private_key=settings.vk_pay_merchant_private_key,
+        timestamp=int(datetime.now(timezone.utc).timestamp()),
+        notification=notification,
+    ))
+
+
+def _vk_pay_credentials_configured() -> bool:
+    required = (
+        settings.vk_app_id,
+        settings.vk_pay_merchant_id,
+        settings.vk_pay_client_id,
+        settings.vk_pay_app_secure_key,
+        settings.vk_pay_merchant_private_key,
+        settings.vk_pay_notification_public_key,
+    )
+    if not all(required):
+        return False
+    try:
+        if int(settings.vk_app_id) <= 0 or int(settings.vk_pay_merchant_id) <= 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    public_key = settings.vk_pay_notification_public_key.replace("\\n", "\n")
+    return is_valid_notification_public_key(public_key)
+
+
+def _vk_pay_is_configured() -> bool:
+    return settings.vk_pay_enabled and _vk_pay_credentials_configured()
+
+
+@router.post("/events/{event_id}/vk-pay-order", status_code=status.HTTP_201_CREATED)
+async def create_vk_pay_order(
+    event_id: str,
+    body: BuyIn | None = None,
+    auth_data: dict = Depends(validate_init_data),
+):
+    """Create a VK-only signed pay-to-service order; ticket waits for callback."""
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VK Pay доступен только во VK Mini App")
+    if not _vk_pay_is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата VK Pay пока не подключена")
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+    async with async_session_factory() as session:
+        user_svc = UserService(session)
+        user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name=user_data.get("first_name", ""),
+        )
+        order_svc = VKPayOrderService(session)
+        try:
+            order, event = await order_svc.create_order(
+                event_id=uid,
+                user=user,
+                platform_user_id=platform_user_id,
+                promo_code=body.promo_code if body else None,
+            )
+            params = build_open_pay_form_params(
+                app_id=settings.vk_app_id,
+                app_secure_key=settings.vk_pay_app_secure_key,
+                merchant_id=int(settings.vk_pay_merchant_id),
+                merchant_private_key=settings.vk_pay_merchant_private_key,
+                order_id=order.issuer_id,
+                amount=order.amount,
+                user_id=int(platform_user_id),
+                description=f"Билет: {event.title}"[:50],
+                timestamp=int(datetime.now(timezone.utc).timestamp()),
+            )
+            await session.commit()
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return {
+        "order_id": order.issuer_id,
+        "amount": float(order.amount),
+        "status": order.status,
+        "expires_at": order.expires_at.isoformat(),
+        "payment": params,
+    }
+
+
+@router.get("/vk-pay-orders/{issuer_id}")
+async def get_vk_pay_order_status(
+    issuer_id: str,
+    auth_data: dict = Depends(validate_init_data),
+):
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ VK Pay доступен только во VK Mini App")
+    user_data = auth_data.get("user", {})
+    async with async_session_factory() as session:
+        user = await UserService(session).get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=str(user_data.get("id", "0")),
+            name=user_data.get("first_name", ""),
+        )
+        order = await VKPayOrderService(session).get_user_order(issuer_id, user.id)
+        if order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
+        await session.commit()
+        return {"order_id": order.issuer_id, "status": order.status, "ticket_id": str(order.ticket_id) if order.ticket_id else None}
+
+
+@router.post("/vk-pay/notifications")
+async def vk_pay_notification(request: Request):
+    """Process VK Pay's RSA-signed transaction callback (not Mini App auth)."""
+    if not _vk_pay_credentials_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="VK Pay callback is not configured")
+    chunks = []
+    body_size = 0
+    async for chunk in request.stream():
+        body_size += len(chunk)
+        if body_size > 65536:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Уведомление слишком большое")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    try:
+        form = parse_qs(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True)
+        data = form["data"][0]
+        signature = form["signature"][0]
+        version = form["version"][0]
+    except (UnicodeDecodeError, ValueError, KeyError, IndexError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное VK Pay уведомление")
+    if version != VK_PAY_NOTIFICATION_VERSION:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неподдерживаемая версия уведомления")
+    public_key = settings.vk_pay_notification_public_key.replace("\\n", "\n")
+    if not verify_notification_signature(data, signature, public_key):
+        logger.warning("VK Pay callback rejected: invalid signature")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Подпись VK Pay не прошла проверку")
+    try:
+        payload = decode_notification(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    provider_body = payload["body"]
+    header = payload.get("header") or {}
+    try:
+        transaction_id = str(UUID(str(provider_body.get("transaction_id", ""))))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID транзакции VK Pay")
+    if (
+        provider_body.get("notify_type") != "TRANSACTION_STATUS"
+        or header.get("status") != "OK"
+        or str(header.get("client_id")) != str(settings.vk_pay_client_id)
+        or str(provider_body.get("merchant_id")) != str(settings.vk_pay_merchant_id)
+    ):
+        logger.warning("VK Pay callback rejected: merchant or protocol mismatch")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Данные платежа VK Pay не совпали с настройками")
+
+    try:
+        amount = Decimal(str(provider_body.get("amount"))).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная сумма VK Pay")
+    if amount <= 0 or provider_body.get("currency") != "RUB":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Валюта или сумма VK Pay не поддерживается")
+
+    issuer_id = str(provider_body.get("issuer_id") or "")
+    async with async_session_factory() as session:
+        order_result = await session.execute(
+            select(VKPayOrder).where(VKPayOrder.issuer_id == issuer_id)
+        )
+        order = order_result.scalar_one_or_none()
+        if order is None:
+            logger.warning("VK Pay callback has unknown order %s", issuer_id)
+            return _vk_pay_ack(transaction_id, "payment_declined")
+        if amount != Decimal(str(order.amount)).quantize(Decimal("0.01")):
+            logger.warning("VK Pay callback rejected: amount mismatch for order %s", issuer_id)
+            return _vk_pay_ack(transaction_id, "payment_declined")
+        user_info = provider_body.get("user_info") or {}
+        if str(user_info.get("user_id", "")) != order.platform_user_id:
+            logger.warning("VK Pay callback rejected: payer mismatch for order %s", issuer_id)
+            return _vk_pay_ack(transaction_id, "payment_declined")
+        try:
+            order_status, _ticket_id = await VKPayOrderService(session).handle_transaction(provider_body)
+            await session.commit()
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return _vk_pay_ack(
+        transaction_id,
+        "payment_delivered" if order_status == "completed" else "payment_declined",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

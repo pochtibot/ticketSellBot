@@ -10,7 +10,7 @@ from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
-    User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment,
+    User, UserIdentity, LinkCode, Event, EventManager, EventPublication, Ticket, Payment, VKPayOrder,
     Channel, ChannelAdmin, VKGroup, EventUpgrade, PromoCode, DiscountType, EventPriceRange,
     TicketStatus, PaymentStatus, PlatformType, SubscriptionTier, PeriodUnit,
 )
@@ -1893,6 +1893,33 @@ class TicketService:
         raw = secrets.token_hex(4).upper()
         return f"{raw[:4]}-{raw[4:]}"
 
+    async def _reserved_vk_seats(self, event_id: uuid.UUID, now: datetime) -> int:
+        result = await self.session.execute(
+            select(func.count(VKPayOrder.id)).where(
+                VKPayOrder.event_id == event_id,
+                VKPayOrder.status == "pending",
+                VKPayOrder.expires_at > now,
+            )
+        )
+        return int(result.scalar_one())
+
+    async def _ensure_inventory_available(self, event: Event, now: datetime) -> None:
+        reserved = await self._reserved_vk_seats(event.id, now)
+        if event.available_tickets - reserved <= 0:
+            raise ValueError("Билеты закончились")
+
+    async def _ensure_no_pending_vk_order(self, user_id: uuid.UUID, event_id: uuid.UUID, now: datetime) -> None:
+        result = await self.session.execute(
+            select(VKPayOrder.id).where(
+                VKPayOrder.user_id == user_id,
+                VKPayOrder.event_id == event_id,
+                VKPayOrder.status == "pending",
+                VKPayOrder.expires_at > now,
+            )
+        )
+        if result.scalar_one_or_none() is not None:
+            raise ValueError("У вас уже есть ожидающий оплаты заказ")
+
     async def buy_ticket(self, user_id: uuid.UUID, event_id: uuid.UUID, promo_code: str | None = None) -> Ticket:
         """Purchase a ticket for an event.
 
@@ -1900,7 +1927,10 @@ class TicketService:
         """
         start = time.perf_counter()
         now = datetime.now(timezone.utc)  # единый момент: валидация и цена по дате
-        event = await self.session.get(Event, event_id)
+        event_result = await self.session.execute(
+            select(Event).where(Event.id == event_id).with_for_update()
+        )
+        event = event_result.scalar_one_or_none()
         if event is None:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_failed",
@@ -1944,7 +1974,9 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие уже прошло")
-        if event.available_tickets <= 0:
+        try:
+            await self._ensure_inventory_available(event, now)
+        except ValueError:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_failed",
                 "event_id": str(event_id),
@@ -1955,6 +1987,8 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Билеты закончились")
+
+        await self._ensure_no_pending_vk_order(user_id, event_id, now)
 
         # Check if user already has an active ticket for this event
         existing_stmt = select(Ticket).where(
@@ -2046,7 +2080,10 @@ class TicketService:
         """
         start = time.perf_counter()
         now = datetime.now(timezone.utc)  # единый момент: валидация и цена по дате
-        event = await self.session.get(Event, event_id)
+        event_result = await self.session.execute(
+            select(Event).where(Event.id == event_id).with_for_update()
+        )
+        event = event_result.scalar_one_or_none()
         if event is None:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_webapp_failed",
@@ -2090,7 +2127,9 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Мероприятие уже прошло")
-        if event.available_tickets <= 0:
+        try:
+            await self._ensure_inventory_available(event, now)
+        except ValueError:
             logger.warning("", extra={
                 "event_type": "ticket.purchase_webapp_failed",
                 "event_id": str(event_id),
@@ -2101,6 +2140,8 @@ class TicketService:
                 "duration_ms": _ms(start),
             })
             raise ValueError("Билеты закончились")
+
+        await self._ensure_no_pending_vk_order(user_id, event_id, now)
 
         # Check if user already has an active ticket for this event
         existing_stmt = select(Ticket).where(
@@ -2278,7 +2319,7 @@ class TicketService:
     async def _get_promo_code(self, event_id: uuid.UUID, code: str) -> PromoCode | None:
         stmt = select(PromoCode).where(
             and_(PromoCode.event_id == event_id, PromoCode.code == code)
-        )
+        ).with_for_update()
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -2297,8 +2338,17 @@ class TicketService:
             raise ValueError("Промокод ещё не действует")
         if promo.ends_at is not None and now > promo.ends_at:
             raise ValueError("Срок действия промокода истёк")
-        if promo.max_uses > 0 and promo.used_count >= promo.max_uses:
-            raise ValueError("Лимит использований промокода исчерпан")
+        if promo.max_uses > 0:
+            reserved_result = await self.session.execute(
+                select(func.count(VKPayOrder.id)).where(
+                    VKPayOrder.promo_code_id == promo.id,
+                    VKPayOrder.status == "pending",
+                    VKPayOrder.expires_at > now,
+                )
+            )
+            reserved_uses = int(reserved_result.scalar_one())
+            if promo.used_count + reserved_uses >= promo.max_uses:
+                raise ValueError("Лимит использований промокода исчерпан")
         return promo
 
     @staticmethod
@@ -2346,6 +2396,12 @@ class TicketService:
             })
             raise ValueError("Билет уже возвращён")
 
+        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
+        payment_result = await self.session.execute(payment_stmt)
+        payment = payment_result.scalar_one_or_none()
+        if payment and payment.provider == "vk_pay" and payment.status == PaymentStatus.completed:
+            raise ValueError("Возврат оплаченного билета VK Pay пока недоступен")
+
         # Mark ticket as refunded
         ticket.status = TicketStatus.refunded
 
@@ -2354,10 +2410,6 @@ class TicketService:
         if event:
             event.available_tickets += 1
 
-        # Update payment if exists
-        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
-        payment_result = await self.session.execute(payment_stmt)
-        payment = payment_result.scalar_one_or_none()
         if payment:
             payment.status = PaymentStatus.refunded
 
@@ -2397,15 +2449,18 @@ class TicketService:
             })
             raise ValueError("Билет уже возвращён")
 
+        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
+        payment_result = await self.session.execute(payment_stmt)
+        payment = payment_result.scalar_one_or_none()
+        if payment and payment.provider == "vk_pay" and payment.status == PaymentStatus.completed:
+            raise ValueError("Возврат оплаченного билета VK Pay пока недоступен")
+
         ticket.status = TicketStatus.refunded
 
         event = await self.session.get(Event, ticket.event_id)
         if event:
             event.available_tickets += 1
 
-        payment_stmt = select(Payment).where(Payment.ticket_id == ticket_id)
-        payment_result = await self.session.execute(payment_stmt)
-        payment = payment_result.scalar_one_or_none()
         if payment:
             payment.status = PaymentStatus.refunded
 

@@ -23,7 +23,7 @@ if config.config_file_name is not None:
 
 # Import all models so Alembic can detect them
 from app.core.database import Base
-from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin  # noqa: F401
+from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, VKPayOrder  # noqa: F401
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

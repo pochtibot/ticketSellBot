@@ -1112,6 +1112,10 @@ async function confirmBuy(eventId) {
     try {
         const promoInput = document.getElementById(`promoInput_${eventId}`);
         const promo = promoInput ? promoInput.value.trim() : "";
+        if (isVKMode() && Number(state.currentEvent && state.currentEvent.price) > 0) {
+            await startVKPayPurchase(eventId, promo);
+            return;
+        }
         const result = await api(`/api/events/${eventId}/buy`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1133,6 +1137,57 @@ async function confirmBuy(eventId) {
         btn.disabled = false;
         btn.textContent = "✅ Подтвердить покупку";
         showError(err.message || "Ошибка при покупке");
+    }
+}
+
+async function startVKPayPurchase(eventId, promo) {
+    const btn = document.getElementById("confirmBtn");
+    try {
+        const body = promo ? { promo_code: promo } : {};
+        const order = await api(`/api/events/${eventId}/vk-pay-order`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const bridge = window.vkBridge;
+        if (!bridge || typeof bridge.send !== "function") {
+            throw new Error("Оплата VK Pay доступна только внутри приложения ВКонтакте");
+        }
+
+        if (btn) btn.textContent = "⏳ Ожидаем оплату...";
+        const result = await bridge.send("VKWebAppOpenPayForm", order.payment);
+        if (!result || result.status !== true) {
+            if (btn) { btn.disabled = false; btn.textContent = "✅ Подтвердить покупку"; }
+            showToast("Оплата отменена. Билет не оформлен.", true);
+            return;
+        }
+
+        if (btn) btn.textContent = "⏳ Проверяем оплату...";
+        let reservationExpired = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const current = await api(`/api/vk-pay-orders/${encodeURIComponent(order.order_id)}`);
+            if (current.status === "completed") {
+                await showMyTickets();
+                showToast("✅ Оплата подтверждена. Билет доступен в разделе «Билеты».");
+                return;
+            }
+            if (current.status === "failed") {
+                throw new Error("Оплата не завершена. Билет не оформлен.");
+            }
+            if (current.status === "expired") reservationExpired = true;
+            if (current.status === "paid_unfulfilled") {
+                throw new Error("Оплата получена, но билет не оформлен. Обратитесь в поддержку приложения.");
+            }
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+
+        if (btn) { btn.disabled = false; btn.textContent = "Проверить оплату ещё раз"; }
+        showToast(reservationExpired
+            ? "Срок резервации истёк. Если оплата была завершена, проверьте раздел «Билеты» позже; при отсутствии билета обратитесь в поддержку."
+            : "Платёж обрабатывается. Билет появится в разделе «Билеты» после подтверждения VK Pay.");
+    } catch (err) {
+        if (btn) { btn.disabled = false; btn.textContent = "✅ Подтвердить покупку"; }
+        showError(err.message || "Не удалось выполнить оплату VK Pay");
     }
 }
 

@@ -84,6 +84,17 @@ def test_appjs_buyer_ticket_qr_and_code():
     assert "X-VK-Init-Data" in APP_JS
 
 
+def test_vk_paid_ticket_uses_vk_pay_and_waits_for_server_confirmation():
+    """VK paid orders use native pay UI and only show tickets after callback."""
+    assert "startVKPayPurchase(eventId, promo)" in APP_JS
+    assert 'bridge.send("VKWebAppOpenPayForm", order.payment)' in APP_JS
+    assert '`/api/vk-pay-orders/${encodeURIComponent(order.order_id)}`' in APP_JS
+    assert 'current.status === "completed"' in APP_JS
+    assert 'current.status === "failed"' in APP_JS
+    assert 'current.status === "expired"' in APP_JS
+    assert 'current.status === "paid_unfulfilled"' in APP_JS
+
+
 def test_appjs_vk_ticket_dm_flow():
     """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
     assert "offerVkTicketDm" in APP_JS

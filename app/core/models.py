@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 import secrets
 
-from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, UniqueConstraint
+from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -372,6 +372,9 @@ class Payment(Base):
     status: Mapped[PaymentStatus] = mapped_column(
         SAEnum(PaymentStatus), default=PaymentStatus.pending, nullable=False
     )
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_order_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     # Промокод, применённый при покупке (nullable — исторические платежи без скидки).
     # amount — фактически уплачено (со скидкой); base_amount — исходная цена события.
     base_amount: Mapped[float | None] = mapped_column(Numeric(precision=10, scale=2), nullable=True)
@@ -488,6 +491,49 @@ class EventPriceRange(Base):
 
     def __repr__(self):
         return f"<EventPriceRange {self.event_id} {self.starts_at}-{self.ends_at}: {self.price}>"
+
+
+class VKPayOrder(Base):
+    """Temporary ticket reservation awaiting verified VK Pay settlement."""
+
+    __tablename__ = "vk_pay_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    issuer_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    platform_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
+    base_amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
+    discount_amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), default=0, nullable=False)
+    promo_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("promo_codes.id", ondelete="SET NULL"), nullable=True
+    )
+    promo_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    ticket_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_vk_pay_order_event_status_expires", "event_id", "status", "expires_at"),
+        Index("ix_vk_pay_order_promo_status_expires", "promo_code_id", "status", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<VKPayOrder {self.issuer_id} — {self.status}>"
 
 
 class ChannelAdmin(Base):

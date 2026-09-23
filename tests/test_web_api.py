@@ -237,6 +237,7 @@ class TestAPIEndpoints:
         with (
             patch("app.web.routes.EventService.list_upcoming", new_callable=AsyncMock, return_value=[mock_event]),
             patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+            patch("app.web.routes.VKPayOrderService.reserved_seats_map", new_callable=AsyncMock, return_value={}),
         ):
             resp = client.get(
                 "/api/events",
@@ -272,6 +273,7 @@ class TestAPIEndpoints:
         with (
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+            patch("app.web.routes.VKPayOrderService.reserved_seats_map", new_callable=AsyncMock, return_value={}),
         ):
             resp = client.get(
                 "/api/events/550e8400-e29b-41d4-a716-446655440000",
@@ -399,6 +401,8 @@ class TestAPIEndpoints:
         with (
             patch("app.web.vk_auth.settings.vk_app_id", 123456),
             patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=Mock(price=0)),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
             patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
             patch("app.web.routes.TicketService.buy_ticket_webapp", new_callable=AsyncMock) as mock_buy,
             patch("app.web.routes._send_ticket_dm", new_callable=AsyncMock, return_value=False),
@@ -415,6 +419,21 @@ class TestAPIEndpoints:
         args, kwargs = mock_user.await_args
         assert kwargs["platform"] == PlatformType.vk
         assert kwargs["platform_user_id"] == "5305539"
+
+    def test_vk_paid_ticket_cannot_use_legacy_buy_route(self, client):
+        vk_header = _vk_auth_header(user_id=5305539)
+        with (
+            patch("app.web.vk_auth.settings.vk_app_id", 123456),
+            patch("app.web.vk_auth.settings.vk_secret_key", "test_vk_secret_key"),
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=Mock(price=100)),
+            patch("app.web.routes.EventService.price_ranges_map", new_callable=AsyncMock, return_value={}),
+        ):
+            resp = client.post(
+                "/api/events/550e8400-e29b-41d4-a716-446655440000/buy",
+                headers={"X-VK-Init-Data": vk_header},
+            )
+        assert resp.status_code == 409
+        assert "VK Pay" in resp.json()["detail"]
 
     def test_list_tickets_vk_platform(self, client):
         """VK-пользователь видит свои билеты (platform=vk)."""

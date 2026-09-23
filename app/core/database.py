@@ -38,7 +38,7 @@ async def get_session() -> AsyncSession:
 async def init_db():
     """Create all tables (for development). Use Alembic in production."""
     # Импортируем модели, чтобы они зарегистрировались в Base.metadata
-    from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin  # noqa: F401
+    from app.core.models import User, Event, Ticket, Payment, Channel, ChannelAdmin, VKPayOrder  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
