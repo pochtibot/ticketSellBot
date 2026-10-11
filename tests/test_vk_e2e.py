@@ -172,7 +172,7 @@ async def test_vk_buy_refund_sync_to_tg(db_client, db_session):
     мгновенно отражаются на другой (общая БД, единые счётчики sold/available).
     Сценарий:
     1. Организатор (TG, X-Skip-Auth) создаёт owner-мероприятие.
-    2. VK-покупатель (X-VK-Init-Data, реальная аутентификация) покупает билет.
+    2. VK-покупатель (X-VK-Init-Data, реальная аутентификация) получает бесплатный билет.
     3. Организатор TG видит sold=1, available уменьшился.
     4. VK-покупатель возвращает билет (POST /api/tickets/{id}/cancel, VK-заголовок).
     5. Организатор TG видит sold=0, refunded=1, available вернулся.
@@ -212,7 +212,7 @@ async def test_vk_buy_refund_sync_to_tg(db_client, db_session):
     assert resp.status_code == 201, resp.text
     ticket = resp.json()
     assert ticket["validation_code"] is not None
-    assert ticket["amount"] == 100
+    assert ticket["amount"] == 0
     ticket_id = ticket["ticket_id"]
 
     # ── Организатор TG видит проданный билет ──

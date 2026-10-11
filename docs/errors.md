@@ -1385,3 +1385,19 @@
 - **Тесты:** добавлен `test_profile_tab_has_navigation_handler` в `tests/test_frontend.py`; `python3 -m pytest tests/test_frontend.py::test_profile_tab_has_navigation_handler -q` — `1 passed`; `node --check app/web/static/app.js` — успешно. Полный Docker-тест не запустился: текущий контейнер не содержит dev-зависимости, а их установка заблокирована отсутствием сетевого доступа; дополнительно обычный compose override содержит устаревший сервис `app`.
 - **Коммит:** — (изменения ожидают ревью).
 - **Связанные ошибки:** нет.
+
+---
+
+## 084 — CI: тестовый job падает после VK Pay merge в dev
+
+- **Дата:** 2026-09-23
+- **Статус:** ✅ Исправлено
+- **Описание:** GitHub Actions run `35916779376` для commit `c9d2d7ec8dfa94e6aeb5804d23cdcdd5eedf73a0` завершился `failure` в job `test`; job `deploy` был пропущен. Через GitHub API подтверждены status/conclusion/step: упал шаг «Запуск тестов» (#7). Полные логи недоступны публичному endpoint (`403 Must have admin rights to Repository`), поэтому причины подтверждены локальным воспроизведением на изолированном PostgreSQL 16 (`552 passed, 7 failed`).
+- **Причины (подтверждены локальными traceback/assertions):**
+  1. `tests/test_vk_e2e.py`: тест `test_vk_buy_refund_sync_to_tg` создаёт бесплатное мероприятие (`price=0`), но проверял `amount == 100`; фактическое значение `0.0`.
+  2. `tests/test_vk_pay_flow.py`: пять async-тестов вызывали `db_client` (`httpx.AsyncClient`) без `await`, из-за чего получали `AttributeError: 'coroutine' object has no attribute 'status_code'`.
+  3. `tests/test_web_api.py::TestPriceRangesAPI.test_event_detail_effective_price`: тест мокал `EventService.get_by_id` и `price_ranges_map`, но новый вызов `VKPayOrderService.reserved_seats_map` уходил в global DB session и падал, если таблица `vk_pay_orders` отсутствовала в БД `TestClient`.
+  4. После исправления async-тестов `test_verified_vk_callback_fulfills_exactly_once` выявил `ForeignKeyViolationError`: Unit of Work обновлял `vk_pay_orders.ticket_id` до INSERT билета, поскольку между моделями нет ORM relationship. Подтверждено локальным PostgreSQL traceback.
+- **Исправление:** обновлена сумма в VK e2e сценарии бесплатного билета; все обращения async-тестов к `db_client` теперь awaited; общий `TestClient` fixture мокает `reserved_seats_map`, оставляя реальные DB-проверки в `db_client` e2e tests; в `app/core/vk_pay_service.py` добавлен flush билета до установки FK `VKPayOrder.ticket_id`.
+- **Проверка:** полный `pytest tests/ -q --timeout=60` на изолированном PostgreSQL 16 — `559 passed, 6 warnings`; целевой набор из 7 ранее падавших тестов — `7 passed`; frontend/API дополнительные тесты и JS/Python syntax checks — успешно. Новый push в `dev`/GitHub Actions после исправления ещё не выполнялся.
+- **Связанные изменения:** VK Pay implementation `c9d2d7e`; исправление CI закоммичено локально в `bugfix/vk-pay-ci-test-failures`; push в GitHub пока не выполнен (HTTP 403).

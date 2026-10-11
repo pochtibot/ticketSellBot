@@ -251,6 +251,9 @@ class VKPayOrderService:
         )
         self.session.add(ticket)
         event.available_tickets -= 1
+        # The order has no ORM relationship to Ticket; flush the ticket first so
+        # the FK update on vk_pay_orders is never emitted before the ticket insert.
+        await self.session.flush()
 
         payment = Payment(
             id=uuid.uuid4(),

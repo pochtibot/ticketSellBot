@@ -53,7 +53,7 @@ async def test_vk_pay_disabled_fails_closed(db_client, sample_event, monkeypatch
     monkeypatch.setattr(settings, "vk_secret_key", "test-vk-secret")
     monkeypatch.setattr(settings, "vk_pay_enabled", False)
 
-    response = db_client.post(
+    response = await db_client.post(
         f"/api/events/{sample_event.id}/vk-pay-order",
         headers=_vk_headers(),
         json={},
@@ -68,7 +68,7 @@ async def test_vk_paid_ticket_cannot_use_legacy_instant_purchase(db_client, samp
 
     monkeypatch.setattr(settings, "vk_app_id", 123456)
     monkeypatch.setattr(settings, "vk_secret_key", "test-vk-secret")
-    response = db_client.post(
+    response = await db_client.post(
         f"/api/events/{sample_event.id}/buy",
         headers=_vk_headers(),
         json={},
@@ -83,7 +83,7 @@ async def test_vk_only_order_reserves_seat_without_issuing_ticket(
     _configure_vk(monkeypatch)
     available_before = sample_event.available_tickets
 
-    response = db_client.post(
+    response = await db_client.post(
         f"/api/events/{sample_event.id}/vk-pay-order",
         headers=_vk_headers(),
         json={},
@@ -114,7 +114,7 @@ async def test_vk_callback_rejects_bad_signature_without_issuing_ticket(
     from app.config import settings
     monkeypatch.setattr(settings, "vk_pay_notification_public_key", public_key)
 
-    order_response = db_client.post(
+    order_response = await db_client.post(
         f"/api/events/{sample_event.id}/vk-pay-order",
         headers=_vk_headers(),
         json={},
@@ -134,7 +134,7 @@ async def test_vk_callback_rejects_bad_signature_without_issuing_ticket(
         "header": {"status": "OK", "ts": str(int(time.time())), "client_id": "client-test"},
     }
     data = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
-    response = db_client.post(
+    response = await db_client.post(
         "/api/vk-pay/notifications",
         data={"data": data, "signature": base64.b64encode(b"forged").decode(), "version": "2-03"},
     )
@@ -155,7 +155,7 @@ async def test_verified_vk_callback_fulfills_exactly_once(
     from app.config import settings
     monkeypatch.setattr(settings, "vk_pay_notification_public_key", public_key)
 
-    order_response = db_client.post(
+    order_response = await db_client.post(
         f"/api/events/{sample_event.id}/vk-pay-order",
         headers=_vk_headers(),
         json={},
@@ -187,7 +187,7 @@ async def test_verified_vk_callback_fulfills_exactly_once(
         vk_private_key.sign(data.encode(), padding.PKCS1v15(), hashes.SHA1())
     ).decode()
 
-    callback = db_client.post(
+    callback = await db_client.post(
         "/api/vk-pay/notifications",
         data={"data": data, "signature": signature, "version": "2-03"},
     )
@@ -200,7 +200,7 @@ async def test_verified_vk_callback_fulfills_exactly_once(
         (ack["data"] + "merchant-private-test").encode()
     ).hexdigest()
 
-    duplicate = db_client.post(
+    duplicate = await db_client.post(
         "/api/vk-pay/notifications",
         data={"data": data, "signature": signature, "version": "2-03"},
     )
@@ -210,11 +210,9 @@ async def test_verified_vk_callback_fulfills_exactly_once(
     assert payment.status.value == "completed"
     assert payment.provider == "vk_pay"
     assert payment.provider_transaction_id == payload["body"]["transaction_id"]
-
-    cancel = db_client.post(
+    cancel = await db_client.post(
         f"/api/tickets/{payment.ticket_id}/cancel",
         headers=_vk_headers(),
     )
     assert cancel.status_code == 409
     assert "VK Pay" in cancel.json()["detail"]
-    assert payment.status.value == "completed"

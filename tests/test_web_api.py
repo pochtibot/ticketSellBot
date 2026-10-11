@@ -32,6 +32,7 @@ def client():
     with (
         patch("app.web.server.init_db", new_callable=AsyncMock),
         patch("app.web.server.close_db", new_callable=AsyncMock),
+        patch("app.web.routes.VKPayOrderService.reserved_seats_map", new_callable=AsyncMock, return_value={}),
         TestClient(app) as c,
     ):
         yield c
