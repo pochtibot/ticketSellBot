@@ -618,7 +618,7 @@ function renderProfile() {
 async function showProfile() {
     state.lastAction = "showProfile";
     setActiveTab("me");
-    updateToolbar("Я", false, false);
+    updateToolbar("Профиль", false, false);
     showPage("profile");
 
     if (!state.me) {
