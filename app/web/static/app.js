@@ -2598,10 +2598,11 @@ function renderMyVKGroups(groups) {
     const container = document.getElementById("myVKGroupsContent");
     let html = `
         <h2 style="margin-bottom:16px">Мои VK-группы</h2>
+        <p class="hint" style="margin-bottom:14px">Чтобы публиковать анонсы в VK-группу, откройте приложение внутри VK, войдите с аккаунта администратора группы и заранее установите приложение в настройках сообщества. При добавлении подтвердите выдачу прав группе.</p>
         <div class="form-inline" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
             <div class="form-field" style="flex:1;min-width:150px">
                 <label class="form-label">ID VK-группы</label>
-                <input class="form-input" id="vkg_id" placeholder="12345678">
+                <input class="form-input" id="vkg_id" inputmode="numeric" placeholder="12345678">
             </div>
             <div class="form-field" style="flex:1;min-width:120px">
                 <label class="form-label">Название (необязательно)</label>
@@ -2640,6 +2641,10 @@ function renderMyVKGroups(groups) {
 async function addMyVKGroup() {
     const groupId = document.getElementById("vkg_id").value.trim();
     if (!groupId) { showToast("Введите ID VK-группы", true); return; }
+    if (!/^\d+$/.test(groupId) || !Number.isSafeInteger(Number(groupId)) || Number(groupId) <= 0) {
+        showToast("Укажите числовой ID сообщества VK (без ссылки и знака минус)", true);
+        return;
+    }
     const title = document.getElementById("vkg_title").value.trim() || null;
 
     // В VK Mini App запрашиваем community token (VKWebAppGetCommunityToken):
@@ -2657,12 +2662,14 @@ async function addMyVKGroup() {
             communityToken = (res && res.access_token) || "";
         } catch (e) {
             hideLoading();
-            showToast("Не удалось получить токен группы. Установите приложение в группу и убедитесь, что вы её администратор", true);
+            const bridgeCode = e?.error_data?.error_code || e?.error_code;
+            const suffix = bridgeCode ? ` (код VK: ${bridgeCode})` : "";
+            showToast(`VK не выдал доступ${suffix}. Проверьте установку приложения в группе и права администратора.`, true);
             return;
         }
         if (!communityToken) {
             hideLoading();
-            showToast("Токен группы не получен (нет прав админа или приложение не установлено в группу)", true);
+            showToast("VK не вернул токен группы. Проверьте установку приложения в сообществе и права администратора, затем попробуйте снова.", true);
             return;
         }
         hideLoading();
@@ -2678,7 +2685,14 @@ async function addMyVKGroup() {
         });
         showToast("✅ VK-группа добавлена" + (communityToken ? " (с токеном)" : ""));
         await showMyVKGroups();
-    } catch (e) { showToast(e.message || "Ошибка", true); }
+    } catch (e) {
+        const message = e.message || "Ошибка добавления VK-группы";
+        if (message.includes("Не удалось подтвердить токен")) {
+            showToast("VK не подтвердил токен. Проверьте ID группы и выданные приложению права.", true);
+        } else {
+            showToast(message, true);
+        }
+    }
 }
 
 async function removeMyVKGroup(groupId) {

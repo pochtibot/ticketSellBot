@@ -1230,6 +1230,18 @@ async def register_my_vk_group(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Укажите ID VK-группы",
         )
+    normalized_group_id = group_id.lstrip("-")
+    if (
+        not normalized_group_id.isascii()
+        or not normalized_group_id.isdigit()
+        or len(normalized_group_id) > 20
+        or int(normalized_group_id) <= 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите числовой ID VK-сообщества",
+        )
+    group_id = normalized_group_id
 
     # Верификация: если передан community token — он должен принадлежать этой группе.
     # Иначе организатор может привязать токен чужой группы и постить на её стену.
