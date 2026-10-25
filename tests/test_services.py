@@ -954,24 +954,6 @@ class TestWebAdminServices:
         svc = ChannelService(db_session)
         assert await svc.get_channel_summary(uuid4()) is None
 
-    async def test_export_event_tickets(self, db_session, sample_event, ticket_svc):
-        """TicketService.export_event_tickets отдаёт полные строки."""
-        from app.core.services import UserService
-        from app.core.models import PlatformType
-        # покупаем билет
-        user_svc = UserService(db_session)
-        user = await user_svc.get_or_create(PlatformType.telegram, "export_user", "Export User")
-        await ticket_svc.buy_ticket(user.id, sample_event.id)
-        await db_session.commit()
-
-        rows = await ticket_svc.export_event_tickets(sample_event.id)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["event_title"] == sample_event.title
-        assert row["user_name"] == "Export User"
-        assert row["status"] == "active"
-        assert "validation_code" in row
-
     async def test_get_ticket_event(self, db_session, sample_event, ticket_svc):
         """TicketService.get_ticket_event возвращает (билет, мероприятие)."""
         from app.core.services import UserService
@@ -1351,16 +1333,6 @@ class TestTicketExtraFields:
         assert len(tickets) == 1
         assert "is_invite" in tickets[0]
         assert "seats" in tickets[0]
-
-    async def test_export_event_tickets_has_invite_fields(self, db_session, sample_event, ticket_svc, sample_user):
-        """export_event_tickets включает is_invite/seats."""
-        await ticket_svc.buy_ticket(sample_user.id, sample_event.id)
-        await db_session.commit()
-        rows = await ticket_svc.export_event_tickets(sample_event.id)
-        assert len(rows) == 1
-        assert "is_invite" in rows[0]
-        assert "seats" in rows[0]
-
 
 # ═══════════════════════════════════════════════════════════════
 # Управление подпиской: смена типа + срока (дни/месяцы/годы)

@@ -362,13 +362,15 @@ def test_vk_profile_does_not_unconditionally_render_external_support():
 
 
 def test_admin_binary_downloads_use_platform_auth_headers():
-    """QR/CSV админа должны работать с VK launch params."""
-    for function_name in ("showTicketQr", "downloadQr", "downloadCsv"):
+    """QR билетов админа должны работать с VK launch params; CSV-экспорт отключён."""
+    for function_name in ("showTicketQr", "downloadQr"):
         start = APP_JS.index(f"async function {function_name}")
         end = APP_JS.find("\nasync function ", start + 1)
         body = APP_JS[start:] if end == -1 else APP_JS[start:end]
         assert "authHeaders()" in body, function_name
         assert '"X-Init-Data": state.initData' not in body, function_name
+    assert "downloadCsv" not in APP_JS
+    assert "Экспорт CSV" not in APP_JS
 
 
 def test_vk_super_admin_ui_is_platform_gated():

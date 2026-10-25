@@ -1894,9 +1894,6 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         </div>
         ${statsHtml}
         <h3 style="margin:16px 0 8px">Билеты</h3>
-        <div style="margin-bottom:12px">
-            <a class="btn btn-secondary" href="#" onclick="downloadCsv('${event.id}'); return false;">⬇️ Экспорт CSV</a>
-        </div>
         ${ticketsHtml}
         ${invitesHtml}
         ${promosHtml}
@@ -2170,22 +2167,6 @@ async function adminCancelTicket(ticketId) {
         showToast("✅ Билет отменён");
         if (state.currentAdminEvent) await showAdminEventDetail(state.currentAdminEvent.id);
     } catch (e) { showToast(e.message || "Ошибка", true); }
-}
-
-async function downloadCsv(eventId) {
-    try {
-        const resp = await fetch(`/api/admin/events/${eventId}/tickets.csv`, { headers: authHeaders() });
-        if (!resp.ok) { showToast("Ошибка загрузки CSV", true); return; }
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `event-${eventId}-tickets.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-    } catch (e) { showToast(e.message || "Ошибка CSV", true); }
 }
 
 // ─── Проверка билета ───────────────────────────────────────────

@@ -915,28 +915,6 @@ class TestAdminAPI:
         assert resp.status_code == 200
         assert resp.json()["sold"] == 2
 
-    def test_admin_csv_export(self, client):
-        """GET /api/admin/events/{id}/tickets.csv — CSV экспорт."""
-        mock_event = Mock()
-        mock_event.id = EVENT_ID
-        mock_event.channel_id = _UUID(CHANNEL_ID)
-        mock_tickets = [{
-            "ticket_id": "t1", "event_title": "Test", "user_name": "User",
-            "purchase_date": "2026-08-01T10:00:00Z", "status": "active",
-            "validation_code": "AB3X-K7M9", "checked_in_at": "", "checked_in_by": "", "is_free": "нет",
-        }]
-
-        with (
-            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
-            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.TicketService.export_event_tickets", new_callable=AsyncMock, return_value=mock_tickets),
-        ):
-            resp = client.get(f"/api/admin/events/{EVENT_ID}/tickets.csv", headers={"X-Skip-Auth": "1"})
-        assert resp.status_code == 200
-        assert "text/csv" in resp.headers["content-type"]
-        assert "AB3X-K7M9" in resp.text
-
-
 class TestSuperAdminGaps:
     """Тесты закрытия пробелов супер-админского функционала."""
 
@@ -1939,20 +1917,6 @@ class TestCoverageGaps:
             resp = client.post("/api/admin/channels/check_expired", headers={"X-Skip-Auth": "1"})
         assert resp.status_code == 200
         assert resp.json()["deactivated"] == 1
-
-    def test_csv_export_empty_404(self, client):
-        """GET tickets.csv без билетов — 404."""
-        mock_event = Mock()
-        mock_event.id = EVENT_ID
-        mock_event.channel_id = _UUID(CHANNEL_ID)
-
-        with (
-            admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)], organizer=True),
-            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
-            patch("app.web.routes.TicketService.export_event_tickets", new_callable=AsyncMock, return_value=[]),
-        ):
-            resp = client.get(f"/api/admin/events/{EVENT_ID}/tickets.csv", headers={"X-Skip-Auth": "1"})
-        assert resp.status_code == 404
 
     def test_events_channel_filter(self, client):
         """GET /api/events?channel_id= фильтрует."""

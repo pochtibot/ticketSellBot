@@ -2562,35 +2562,6 @@ class TicketService:
             return None
         return ticket, event
 
-    async def export_event_tickets(self, event_id: uuid.UUID) -> list[dict]:
-        """Full ticket rows for an event (CSV export)."""
-        stmt = (
-            select(Ticket, User.name, Event.title)
-            .join(User, Ticket.user_id == User.id)
-            .join(Event, Ticket.event_id == Event.id)
-            .where(Ticket.event_id == event_id)
-            .order_by(Ticket.purchase_date.desc())
-        )
-        result = await self.session.execute(stmt)
-        rows = result.all()
-
-        tickets = []
-        for ticket, user_name, event_title in rows:
-            tickets.append({
-                "ticket_id": str(ticket.id),
-                "event_title": event_title,
-                "user_name": user_name or "",
-                "purchase_date": ticket.purchase_date.isoformat(),
-                "status": ticket.status.value,
-                "validation_code": ticket.validation_code or "",
-                "checked_in_at": ticket.checked_in_at.isoformat() if ticket.checked_in_at else "",
-                "checked_in_by": ticket.checked_in_by or "",
-                "is_free": "да" if ticket.is_free else "нет",
-                "is_invite": "да" if ticket.is_invite else "нет",
-                "seats": ticket.seats,
-            })
-        return tickets
-
     # ─── Validation & Check-in ────────────────────────────────────────
 
     async def validate_ticket(self, code: str) -> dict:

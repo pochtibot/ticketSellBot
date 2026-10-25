@@ -4,7 +4,6 @@ REST API endpoints for Telegram Mini App.
 User-facing endpoints require platform initData validation. VK Pay notifications use VK's signed merchant callback protocol.
 """
 
-import csv
 import io
 import logging
 from datetime import datetime, timezone
@@ -1878,43 +1877,6 @@ async def admin_event_tickets(
         tickets = await ticket_svc.get_event_tickets(uid)
 
     return {"event_id": str(uid), "tickets": tickets}
-
-
-@router.get("/admin/events/{event_id}/tickets.csv")
-async def admin_event_tickets_csv(
-    event_id: str,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Экспорт билетов на мероприятие в CSV."""
-    try:
-        uid = UUID(event_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
-
-    async with async_session_factory() as session:
-        event_svc = EventService(session)
-        event = await event_svc.get_by_id(uid)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        ticket_svc = TicketService(session)
-        tickets = await ticket_svc.export_event_tickets(uid)
-
-    if not tickets:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Нет билетов для экспорта")
-
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=list(tickets[0].keys()))
-    writer.writeheader()
-    writer.writerows(tickets)
-    buf.seek(0)
-
-    return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="event-{uid}-tickets.csv"'},
-    )
 
 
 # ═══════════════════════════════════════════════════════════════
