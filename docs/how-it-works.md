@@ -1,235 +1,76 @@
 # Как работает TicketBot
 
-Этот документ описывает архитектуру после перехода на раздельные процессы для каждой платформы.
+Документ отражает текущую структуру кода. TicketBot состоит из общего асинхронного ядра, веб-кабинета и отдельных адаптеров мессенджеров.
 
----
+## Компоненты и процессы
 
-## 1. Архитектура: независимые процессы
-
-Каждая платформа запускается в **отдельном Python-процессе / Docker-контейнере**:
-
-```
-  ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-  │  ticketbot-telegram  │    │   ticketbot-vk      │    │   ticketbot-max     │
-  │  python -m bot.telegram │ │  python -m bot.vk   │    │  python -m bot.max  │
-  │  aiogram 3.x         │    │  vkbottle 4.x       │    │  max-bot-api        │
-  │  tg_user → PostgreSQL │   │  vk_user → PG       │    │  max_user → PG      │
-  └──────────┬──────────┘    └──────────┬──────────┘    └──────────┬──────────┘
-             │                          │                          │
-             └──────────────────────────┼──────────────────────────┘
-                                        ▼
-                              ┌─────────────────────┐
-                              │  PostgreSQL          │
-                              │  ticketbot (общая)    │
-                              │  tg_user / vk_user    │
-                              │  / max_user          │
-                              └─────────────────────┘
+```text
+Telegram bot ─┐
+VK bot ────────┼── app/core/services.py ── PostgreSQL
+MAX bot ──────┤
+FastAPI web ──┘
 ```
 
-### Точка входа
+| Компонент | Точка запуска | Реализация |
+|---|---|---|
+| Telegram-бот | `python -m app.bot.telegram` | aiogram; пользовательские команды, админ-функции, публикация в канал |
+| VK-бот | `python -m app.bot.vk` | vkbottle; базовые команды пользователя |
+| MAX-бот | `python -m app.bot.max` | `max-bot-api-client-py`; базовые команды пользователя, SDK требуется отдельно |
+| Web / Mini App API | `python -m app.bot.web` | FastAPI; REST API и статические Telegram/VK Mini App интерфейсы |
+| Seed данных | `python -m app.bot.seed` | Добавляет демонстрационные мероприятия |
 
-| Платформа | Команда | Файл |
-|-----------|---------|------|
-| Telegram | `python -m bot.telegram` | `app/bot/telegram.py` |
-| VK | `python -m bot.vk` | `app/bot/vk.py` |
-| MAX | `python -m bot.max` | `app/bot/max.py` |
+Docker Compose по умолчанию описывает PostgreSQL, Telegram, Web и seed profile. VK и MAX запускаются через profile `all`. Веб-сервис имеет порт 8080.
 
-### Docker
+## Слои приложения
 
-| Команда | Что запускается |
-|---------|----------------|
-| `docker compose up -d` | PostgreSQL + Telegram бот |
-| `docker compose --profile all up -d` | + VK + MAX |
-| `docker compose run --rm seed` | Тестовые мероприятия |
+- `app/core/models.py` — SQLAlchemy-модели и статусы.
+- `app/core/database.py` — async engine, сессии, `init_db()` и закрытие engine.
+- `app/core/services.py` — общие сервисы для пользователей, идентичностей, площадок, мероприятий, билетов и статистики.
+- `app/web/routes.py` и `app/web/dependencies.py` — REST API и проверки пользователя/роли.
+- `app/platforms/` — адаптеры платформ, форматирование и вызов общих сервисов.
+- `app/web/static/` — интерфейс Mini App.
+- `migrations/` — Alembic-миграции.
 
----
+Разделение платформенных процессов не означает одинаковый набор функций. Сейчас Telegram-бот зарегистрирован преимущественно как вход в Mini App (команды `/start`, `/menu`, `/admin`), плюс deep links и обновления канала. В файле остаются старые обработчики, которые не включены в регистрацию. VK/MAX-боты содержат базовые команды пользователя. Организаторские функции доступны через web API/Mini App.
 
-## 2. База данных: одна БД, три роли
+## Данные
 
-Единая база `ticketbot`, но каждая платформа подключается под своей ролью PostgreSQL:
+PostgreSQL содержит, в частности:
 
-| Роль | Платформа | Права |
-|------|-----------|-------|
-| `postgres` | Миграции / seed | Все права (CREATE TABLE, DROP и т.д.) |
-| `tg_user` | Telegram | SELECT, INSERT, UPDATE |
-| `vk_user` | VK | SELECT, INSERT, UPDATE |
-| `max_user` | MAX | SELECT, INSERT, UPDATE |
+| Модель | Назначение |
+|---|---|
+| `User`, `UserIdentity`, `LinkCode` | Пользователи, связанные аккаунты TG/VK и одноразовые коды привязки |
+| `Channel`, `ChannelAdmin`, `VKGroup` | Telegram-каналы, их администраторы и подключённые VK-группы |
+| `Event`, `EventManager`, `EventPublication` | Мероприятия, менеджеры и публикации в площадках |
+| `Ticket`, `Payment`, `VKPayOrder` | Билеты, платежные записи и заказы VK Pay |
+| `EventUpgrade`, `PromoCode`, `EventPriceRange` | Премиум-функции события, промокоды и динамические цены |
 
-Ограничения ролей:
-- **Нет права DROP/ALTER** — платформы не меняют схему
-- **Нет права DELETE** (опционально) — мягкое удаление через поля `is_active`/`status`
-- Каждая платформа работает только со своими данными через `platform`-поле в таблице `users`
+Каждая identity уникальна по паре `(platform, platform_user_id)`. Привязанные Telegram- и VK-аккаунты могут разрешаться в одного канонического пользователя. Мероприятие может быть связано с каналом или владельцем-пользователем.
 
-Скрипт создания ролей: `scripts/init-db-roles.sh`
+## Авторизация и роли в web
 
----
+Telegram Mini App отправляет `X-Init-Data`, который проверяется подписью Telegram. VK Mini App передаёт launch params в `X-VK-Init-Data`, которые проверяются модулем `app/web/vk_auth.py`. `X-Skip-Auth` работает только при `ALLOW_SKIP_AUTH=true`.
 
-## 3. Последовательность запуска
+Роль web-пользователя определяется в `app/web/dependencies.py`: супер-администратор (Telegram ID из `ADMIN_TELEGRAM_IDS`), организатор (активная подписка пользователя и/или управляемого канала) или обычный пользователь. Супер-администратор не получает организаторские права из-за своего статуса. Организаторские подписки и премиум события активируются заглушечным сценарием без реальной оплаты; VK Pay — отдельный web API-поток, включаемый параметрами `VK_PAY_*`.
 
-```
-1. docker compose up -d telegram (или python -m bot.telegram)
-   │
-   ├─ Загрузка config из .env.telegram
-   │  └─ DATABASE_URL = postgresql+asyncpg://tg_user:...@db:5432/ticketbot
-   │
-   ├─ init_db() — создание таблиц (если ещё нет)
-   │  └─ Base.metadata.create_all
-   │
-   ├─ TelegramBot()
-   │  ├─ Bot(token=TELEGRAM_TOKEN)
-   │  ├─ Dispatcher(storage=MemoryStorage())
-   │  └─ _register_handlers() — регистрация всех хендлеров
-   │
-   ├─ bot.run() — start_polling (с ретраями при ошибках)
-   │
-   └─ Ctrl+C → bot.stop() → close_db()
+Актуальная матрица прав: [roles-matrix.md](roles-matrix.md). Она описывает web-кабинет; права команд Telegram-бота следует сверять с `app/platforms/telegram/bot.py`.
 
-2. docker compose --profile all up -d vk — аналогично, но с .env.vk
-3. docker compose --profile all up -d max — аналогично, но с .env.max
-```
+## Типовые потоки
 
----
+### Покупка
 
-## 4. Анатомия запроса
+Клиент вызывает сервис покупки билета напрямую через платформенный обработчик или web route. Сервис проверяет мероприятие, доступность, дату и отсутствие активного дубликата, затем создаёт билет и обновляет остаток. Для покупок с промокодом и ценовым диапазоном итоговая цена фиксируется в данных покупки. В web-потоке VK Pay создаётся заказ, а завершение обрабатывается подписанным уведомлением провайдера.
 
-```
-Пользователь          Платформа                БД
-   │                     │                     │
-   ├─ /events ──────────►                       │
-   │                     ├─ Создание сессии      │
-   │                     ├─ EventService         │
-   │                     │  .list_upcoming() ───►│
-   │                     │◄─ events список ──────┤
-   │                     ├─ Форматирование        │
-   │◄─ ответ ────────────┤                     │
-   │                     └─ Сессия закрыта      │
-```
+### Возврат и вход
 
-Разница между платформами — **только в форматировании ответа**:
-- Telegram: HTML, inline-клавиатуры, канал
-- VK: Простой текст
-- MAX: Простой текст
+Пользователь может отменить свой активный билет. Организатор проверяет билет по коду/QR и фиксирует check-in; состояния билета описаны в `TicketStatus` (`active`, `checked_in`, `refunded`).
 
----
+### Публикация
 
-## 5. Жизненный цикл контейнеров
+Организатор публикует мероприятие через web API или доступные Telegram-сценарии. Публикации и целевые площадки сохраняются отдельно в `EventPublication`; подключение Telegram-каналов и VK-групп управляется соответствующими сервисами.
 
-```
-docker compose up -d
-   │
-   ├── db ─── postgres:16-alpine (running)
-   ├── telegram ─── python -m bot.telegram (running)
-   │                └─ profile: "" (default)
-   ├── vk ─── python -m bot.vk (остановлен, profile: all)
-   └── max ─── python -m bot.max (остановлен, profile: all)
+## Запуск и схема БД
 
-docker compose --profile all up -d
-   └── + vk, max запускаются
+Entry points вызывают `init_db()`, который выполняет `Base.metadata.create_all` и полезен для разработки/первичного старта. Он не заменяет миграции: изменения схемы проекта оформляются в `migrations/` и в production должны применяться Alembic с правами миграционного пользователя. Приложения получают `DATABASE_URL`; примеры переменных находятся в `.env.*.example`.
 
-docker compose down
-   └── Все контейнеры остановлены, pgdata сохранена
-```
-
----
-
-## 6. Изоляция сбоев
-
-```
-🔥 Telegram крашнулся (ошибка в хендлере):
-   └─ Контейнер ticketbot-telegram перезапускается
-   └─ VK и MAX продолжают работать
-
-🔥 VK упал (потеря соединения):
-   └─ ticketbot-vk делает retry (до 10 попыток)
-   └─ Telegram и MAX не затронуты
-
-🔥 PostgreSQL недоступен:
-   └─ Все контейнеры ждут healthcheck
-   └─ retry-цикл в каждом entry point
-```
-
----
-
-## 7. Важные файлы
-
-| Файл | Роль |
-|------|------|
-| `app/bot/telegram.py` | Entry point Telegram |
-| `app/bot/vk.py` | Entry point VK |
-| `app/bot/max.py` | Entry point MAX |
-| `app/platforms/telegram/bot.py` | Telegram адаптер (aiogram) |
-| `app/platforms/vk/bot.py` | VK адаптер (vkbottle) |
-| `app/platforms/max/bot.py` | MAX адаптер (max-bot-api) |
-| `app/platforms/base.py` | Абстрактный класс PlatformBot |
-| `app/config.py` | Чтение .env через pydantic-settings |
-| `app/core/database.py` | async engine, сессии, init_db |
-| `app/core/models.py` | ORM-модели (5 таблиц) |
-| `app/core/services.py` | Бизнес-логика |
-| `scripts/init-db-roles.sh` | Создание ролей PostgreSQL |
-| `scripts/healthcheck.py` | Healthcheck всех платформ |
-
----
-
-## 8. Расход RAM
-
-| Компонент | RAM |
-|-----------|:---:|
-| PostgreSQL (Docker) | ~50–200 MB |
-| Telegram бот (aiogram) | ~30–60 MB |
-| VK бот (vkbottle) | ~30–60 MB |
-| MAX бот (max-bot-api) | ~30–60 MB |
-| **Итого (все платформы)** | **~140–380 MB** |
-| **Только Telegram** | **~80–260 MB** |
-
----
-
-## 9. Билеты и валидация на входе
-
-### Уровни подписки
-
-Подписка канала имеет уровень (tier):
-
-| Tier | Фичи |
-|------|------|
-| `basic` | Бесплатные мероприятия, короткий код на вход |
-| `pro` | Платные мероприятия, короткий код + QR, промокоды |
-
-Активация: `/subscribe @channel 30 basic` или `/subscribe @channel 30 pro`.
-
-Тариф проверяется при создании мероприятия — если канал basic, price не может быть > 0.
-
-### Бесплатные мероприятия
-
-1. Пользователь нажимает «🎟 Получить билет» на анонсе
-2. Создаётся билет с уникальным кодом формата `AB3X-K7M9` (8 hex-символов)
-3. Код приходит в ЛС пользователю отдельным сообщением (🎫 <b>Ваш билет</b> → 🔑 Код: AB3X-K7M9).
-   Если ЛС с ботом не начато — код показывается в alert'е и в /my_tickets
-4. Админ проверяет билет через **админ-меню** (кнопка «🔍 Проверить билет» → ввод кода)
-   или командой `/check AB3X-K7M9`
-5. Бот отвечает одним из:
-   - ✅ <b>Вход разрешён</b> — Иван И., мероприятие «Лекция», 19:35 UTC
-   - 🟡 <b>Билет уже использован</b> — первый вход в 19:30
-   - ❌ <b>Билет с кодом XXXX-XXXX не найден</b> — неверный код
-   - ❌ <b>Билет возвращён</b> — билет отменён
-
-### Платные мероприятия (Pro)
-
-Всё то же +:
-- При покупке генерируется QR-код
-- Планируется: Mini App сканер QR для админа (встроенный Telegram QR scanner)
-- Планируется: более 2 типов билетов, промокоды, экспорт CSV
-
-### Жизненный цикл билета
-
-```
-active → checked_in (на входе) → конец
-active → refunded (возврат)
-```
-
-### Новые event_type в логах
-
-| event_type | Когда |
-|---|----|
-| `ticket.validate` | Проверка билета по коду |
-| `ticket.checked_in` | Успешный вход |
-| `ticket.checkin_failed` | Ошибка входа |
+Подробности Compose и окружений — в корневом [README](../README.md) и `docker-compose.yml`.

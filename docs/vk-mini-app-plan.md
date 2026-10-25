@@ -175,7 +175,7 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 | 4 | UX добавления соработника (по ID с другой площадки) и права менеджера | ✅ права определены: менеджер — продажи; управление — owner. **UX-кнопка добавления — TODO (в UI)** |
 | 5 | DM-уведомления покупателю в VK (требует `VKWebAppAllowMessagesFromGroup`) | 📌 отложить |
 | 6 | VK Pay для платных билетов | ✅ код заказов/подписанного pay-to-service/callback реализован; выключен до merchant onboarding и sandbox-проверки. Возвраты оплаченных VK-билетов требуют отдельного provider refund flow. Инструкция: `docs/vk-pay-setup.md` |
-| 7 | Старый VK-бот (vkbottle, команды `/buy` и т.д.) — устарел в режиме «только web» | 📌 решить: убрать/оставить |
+| 7 | VK-бот (vkbottle, базовые пользовательские команды `/buy` и т.д.) | 📌 Реализация остаётся в `app/platforms/vk/bot.py`; решение о дальнейшем продукте/развёртывании отдельно от текущего кода Mini App |
 | 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения token (сейчас бэкенд принимает token в POST) | ✅ подключён: при добавлении VK-группы в VK-контексте запрашивается community token (scope `wall,messages,manage,photos,app_widget`) и передаётся в POST `/api/me/vk-groups` (2026-08-22) |
 
 ## 10. Публикация VK Mini App (чек-лист, 2026-08-22)

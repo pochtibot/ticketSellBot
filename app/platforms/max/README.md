@@ -1,45 +1,22 @@
-# MAX Bot
+# MAX
 
-Адаптер для **MAX (max.ru)** — российского мессенджера от VK Group.
+В `app/platforms/max/bot.py` реализован адаптер MAX с пользовательскими командами `/start`, `/events`, `/event`, `/buy`, `/my_tickets`, `/cancel`. Он использует общие сервисы и данные TicketBot. Отдельной MAX Mini App и административных команд в адаптере нет.
 
-## Статус
+Адаптер импортирует SDK `max-bot-api-client-py` как необязательную зависимость. Если SDK не установлен или токен отсутствует, запуск MAX завершается сообщением об ошибке.
 
-⏸️ **Заглушка** — код написан по документации API, но не протестирован.  
-Ждёт доступа к [max-bot-api-client-py](https://pypi.org/project/max-bot-api-client-py/).
+## Настройка и запуск
 
-- Документация API: https://dev.max.ru/docs-api
-- Python SDK: `pip install max-bot-api-client-py`
+В `.env.max` задайте `MAX_TOKEN` и `DATABASE_URL`, затем установите SDK в окружение и запустите:
 
-## Команды
+```bash
+pip install max-bot-api-client-py
+python -m app.bot.max
+```
 
-| Команда | Описание |
-|---------|----------|
-| `start` | Приветствие + список команд |
-| `events` | Список предстоящих мероприятий |
-| `event <id>` | Детали мероприятия |
-| `buy <id>` | Купить билет |
-| `my_tickets` | Мои билеты |
-| `cancel <id>` | Отменить билет |
-
-> MAX использует команды **без слэша** (в отличие от Telegram и VK).
-
-## Настройка
-
-1. Получить токен у @MasterBot
-2. Установить SDK: `pip install max-bot-api-client-py`
-3. Настроить `.env.max`:
-   ```
-   DATABASE_URL=postgresql+asyncpg://max_user:password@localhost:5432/ticketbot
-   MAX_TOKEN=ваш_токен
-   ```
-
-## Запуск
+В Docker Compose сервис входит в профиль `all`:
 
 ```bash
 docker compose --profile all up -d max
 ```
 
-## Классы
-
-- **`MaxPlatformBot`** (`bot.py`) — основной класс с хендлерами
-- Использует `max_bot_api.MaxBot`
+См. также [`docs/how-it-works.md`](../../../docs/how-it-works.md) и `.env.max.example`.
