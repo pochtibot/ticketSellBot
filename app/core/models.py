@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 import secrets
 
-from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, Index, UniqueConstraint
+from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -534,6 +534,46 @@ class VKPayOrder(Base):
 
     def __repr__(self):
         return f"<VKPayOrder {self.issuer_id} — {self.status}>"
+
+
+class VKPayProductOrder(Base):
+    """VK Pay order for organizer subscription or per-event premium."""
+
+    __tablename__ = "vk_pay_product_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    issuer_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    platform_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    product_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tier: Mapped[SubscriptionTier | None] = mapped_column(SAEnum(SubscriptionTier), nullable=True)
+    event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    amount: Mapped[float] = mapped_column(Numeric(precision=10, scale=2), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_vk_pay_product_user_status_expires", "user_id", "status", "expires_at"),
+        CheckConstraint(
+            "(product_type = 'subscription' AND tier IS NOT NULL AND event_id IS NULL) OR "
+            "(product_type = 'event_premium' AND tier IS NULL AND event_id IS NOT NULL)",
+            name="ck_vk_pay_product_order_target",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<VKPayProductOrder {self.issuer_id} {self.product_type} — {self.status}>"
 
 
 class ChannelAdmin(Base):

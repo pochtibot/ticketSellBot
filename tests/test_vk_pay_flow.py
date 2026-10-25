@@ -12,7 +12,17 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from sqlalchemy import select
 
-from app.core.models import Payment, Ticket, VKPayOrder
+from app.core.models import (
+    EventUpgrade,
+    Payment,
+    PlatformType,
+    SubscriptionTier,
+    Ticket,
+    User,
+    VKPayOrder,
+    VKPayProductOrder,
+)
+from app.core.services import EventService, UserService
 from app.core.vk_pay_service import VKPayOrderService
 from app.web.vk_auth import compute_sign
 
@@ -44,6 +54,31 @@ def _configure_vk(monkeypatch):
         Encoding.PEM, PublicFormat.SubjectPublicKeyInfo,
     ).decode()
     monkeypatch.setattr(settings, "vk_pay_notification_public_key", public_key)
+    return test_key
+
+
+async def _post_product_callback(db_client, private_key, order_id, amount):
+    payload = {
+        "body": {
+            "transaction_id": "1f62248b-7545-4c35-9170-5b84bf8869b6",
+            "notify_type": "TRANSACTION_STATUS",
+            "issuer_id": order_id,
+            "amount": amount,
+            "currency": "RUB",
+            "merchant_id": 654321,
+            "user_info": {"user_id": "5305539"},
+            "status": "paid",
+        },
+        "header": {"status": "OK", "ts": str(int(time.time())), "client_id": "client-test"},
+    }
+    data = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    signature = base64.b64encode(
+        private_key.sign(data.encode(), padding.PKCS1v15(), hashes.SHA1())
+    ).decode()
+    return await db_client.post(
+        "/api/vk-pay/notifications",
+        data={"data": data, "signature": signature, "version": "2-03"},
+    )
 
 
 async def test_vk_pay_disabled_fails_closed(db_client, sample_event, monkeypatch):
@@ -216,3 +251,106 @@ async def test_verified_vk_callback_fulfills_exactly_once(
     )
     assert cancel.status_code == 409
     assert "VK Pay" in cancel.json()["detail"]
+
+
+async def test_vk_subscription_requires_vk_pay_and_legacy_stub_is_blocked(
+    db_client, db_session, monkeypatch,
+):
+    from app.config import settings
+
+    private_key = _configure_vk(monkeypatch)
+    monkeypatch.setattr(settings, "vk_pay_subscription_basic_price", "129.00")
+    monkeypatch.setattr(settings, "vk_pay_subscription_pro_price", "299.00")
+    user = await UserService(db_session).get_or_create(
+        platform=PlatformType.vk, platform_user_id="5305539", name="VK Buyer",
+    )
+
+    legacy = await db_client.post(
+        "/api/me/subscription", headers=_vk_headers(), json={"tier": "basic"},
+    )
+    assert legacy.status_code == 409
+    assert user.is_subscription_active is False
+
+    response = await db_client.post(
+        "/api/me/vk-pay-product-order",
+        headers=_vk_headers(),
+        json={"product_type": "subscription", "tier": "pro", "amount": 1},
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert result["amount"] == 299.0
+    assert result["payment"]["params"]["amount"] == "299.00"
+    assert user.is_subscription_active is False
+
+    callback = await _post_product_callback(
+        db_client, private_key, result["order_id"], "299.00",
+    )
+    assert callback.status_code == 200, callback.text
+    order = (await db_session.execute(select(VKPayProductOrder))).scalar_one()
+    assert order.status == "completed"
+    assert order.product_type == "subscription"
+    assert order.tier is SubscriptionTier.pro
+    assert user.is_subscription_active is True
+    assert user.subscription_tier is SubscriptionTier.pro
+    expiration = user.subscription_until
+
+    duplicate = await _post_product_callback(
+        db_client, private_key, result["order_id"], "299.00",
+    )
+    assert duplicate.status_code == 200
+    assert user.subscription_until == expiration
+
+
+async def test_vk_event_premium_is_fulfilled_only_after_signed_callback(
+    db_client, db_session, monkeypatch,
+):
+    from app.config import settings
+
+    private_key = _configure_vk(monkeypatch)
+    monkeypatch.setattr(settings, "vk_pay_event_premium_price", "199.00")
+    user = await UserService(db_session).get_or_create(
+        platform=PlatformType.vk, platform_user_id="5305539", name="VK Organizer",
+    )
+    event = await EventService(db_session).create(
+        title="VK-owned event",
+        description="",
+        date=datetime.now(timezone.utc) + timedelta(days=10),
+        location="",
+        price=0,
+        total_tickets=20,
+        channel_id=None,
+        owner_user_id=user.id,
+    )
+    event.is_published = True
+    await db_session.flush()
+
+    legacy = await db_client.post(
+        f"/api/me/events/{event.id}/premium",
+        headers=_vk_headers(),
+        json={},
+    )
+    assert legacy.status_code == 409
+
+    response = await db_client.post(
+        "/api/me/vk-pay-product-order",
+        headers=_vk_headers(),
+        json={"product_type": "event_premium", "event_id": str(event.id)},
+    )
+    assert response.status_code == 201, response.text
+    order_id = response.json()["order_id"]
+    assert response.json()["amount"] == 199.0
+    assert await EventService(db_session).get_event_is_premium(event.id) is False
+
+    callback = await _post_product_callback(db_client, private_key, order_id, "199.00")
+    assert callback.status_code == 200, callback.text
+    upgrade = (await db_session.execute(select(EventUpgrade))).scalar_one()
+    assert upgrade.status.value == "completed"
+    assert upgrade.provider == "vk_pay"
+    assert float(upgrade.amount) == 199.0
+    assert await EventService(db_session).get_event_is_premium(event.id) is True
+
+    order = await db_client.get(
+        f"/api/vk-pay-product-orders/{order_id}", headers=_vk_headers(),
+    )
+    assert order.status_code == 200
+    assert order.json()["status"] == "completed"

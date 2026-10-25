@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import UUID
-from typing import Optional
+from typing import Optional, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -285,3 +285,10 @@ class EventPremiumIn(BaseModel):
     """Покупка премиума на одно мероприятие (stub-оплата)."""
     amount: float = 0
     provider: Optional[str] = None
+
+
+class VKPayProductOrderIn(BaseModel):
+    """VK Pay purchase of an organizer subscription or event premium."""
+    product_type: Literal["subscription", "event_premium"]
+    tier: Optional[SubscriptionTier] = None
+    event_id: Optional[UUID] = None

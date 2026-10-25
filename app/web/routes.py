@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import PlatformType, Event, VKPayOrder
+from app.core.models import PlatformType, Event, VKPayOrder, VKPayProductOrder, SubscriptionTier
 from app.core.vk_pay_service import VKPayOrderService
 from app.core.qr import generate_qr_png
 from app.core.schemas import (
@@ -44,6 +44,7 @@ from app.core.schemas import (
     PromoCodeCreate,
     BuyIn,
     PriceRangesUpdate,
+    VKPayProductOrderIn,
 )
 from app.core.services import (
     ChannelAdminService,
@@ -349,6 +350,16 @@ def _vk_pay_is_configured() -> bool:
     return settings.vk_pay_enabled and _vk_pay_credentials_configured()
 
 
+def _vk_pay_product_price(raw: str | None) -> Decimal | None:
+    if not raw:
+        return None
+    try:
+        amount = Decimal(raw).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
+    return amount if amount.is_finite() and amount >= Decimal("1.00") else None
+
+
 @router.post("/events/{event_id}/vk-pay-order", status_code=status.HTTP_201_CREATED)
 async def create_vk_pay_order(
     event_id: str,
@@ -428,6 +439,103 @@ async def get_vk_pay_order_status(
         return {"order_id": order.issuer_id, "status": order.status, "ticket_id": str(order.ticket_id) if order.ticket_id else None}
 
 
+@router.post("/me/vk-pay-product-order", status_code=status.HTTP_201_CREATED)
+async def create_vk_pay_product_order(
+    body: VKPayProductOrderIn,
+    auth_data: dict = Depends(validate_init_data),
+):
+    """Create a server-priced VK Pay order for organizer features."""
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Оплата доступна только во VK Mini App")
+    if not _vk_pay_is_configured():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата VK Pay пока не подключена")
+
+    if body.product_type == "subscription":
+        if body.tier is None or body.event_id is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите тариф подписки")
+        raw_price = {
+            SubscriptionTier.basic: settings.vk_pay_subscription_basic_price,
+            SubscriptionTier.pro: settings.vk_pay_subscription_pro_price,
+        }[body.tier]
+        description = f"Подписка организатора {body.tier.value}"
+    else:
+        if body.event_id is None or body.tier is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите мероприятие")
+        raw_price = settings.vk_pay_event_premium_price
+        description = "Премиум мероприятия"
+    price = _vk_pay_product_price(raw_price)
+    if price is None or not price.is_finite() or price < Decimal("1.00"):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Цена продукта VK Pay не настроена")
+
+    user_data = auth_data.get("user", {})
+    platform_user_id = str(user_data.get("id", "0"))
+    try:
+        vk_user_id = int(platform_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID пользователя VK")
+
+    async with async_session_factory() as session:
+        user = await UserService(session).get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name=user_data.get("first_name", ""),
+        )
+        try:
+            order = await VKPayOrderService(session).create_product_order(
+                user=user,
+                platform_user_id=platform_user_id,
+                product_type=body.product_type,
+                amount=price,
+                tier=body.tier,
+                event_id=body.event_id,
+            )
+            params = build_open_pay_form_params(
+                app_id=settings.vk_app_id,
+                app_secure_key=settings.vk_pay_app_secure_key,
+                merchant_id=int(settings.vk_pay_merchant_id),
+                merchant_private_key=settings.vk_pay_merchant_private_key,
+                order_id=order.issuer_id,
+                amount=order.amount,
+                user_id=vk_user_id,
+                description=description[:50],
+                timestamp=int(datetime.now(timezone.utc).timestamp()),
+            )
+            await session.commit()
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    return {
+        "order_id": order.issuer_id,
+        "amount": float(order.amount),
+        "product_type": order.product_type,
+        "status": order.status,
+        "expires_at": order.expires_at.isoformat(),
+        "payment": params,
+    }
+
+
+@router.get("/vk-pay-product-orders/{issuer_id}")
+async def get_vk_pay_product_order_status(
+    issuer_id: str,
+    auth_data: dict = Depends(validate_init_data),
+):
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ доступен только во VK Mini App")
+    user_data = auth_data.get("user", {})
+    async with async_session_factory() as session:
+        user = await UserService(session).get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=str(user_data.get("id", "0")),
+            name=user_data.get("first_name", ""),
+        )
+        order = await VKPayOrderService(session).get_product_order(issuer_id, user.id)
+        if order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
+        await session.commit()
+        return {"order_id": order.issuer_id, "status": order.status}
+
+
 @router.post("/vk-pay/notifications")
 async def vk_pay_notification(request: Request):
     """Process VK Pay's RSA-signed transaction callback (not Mini App auth)."""
@@ -487,18 +595,33 @@ async def vk_pay_notification(request: Request):
             select(VKPayOrder).where(VKPayOrder.issuer_id == issuer_id)
         )
         order = order_result.scalar_one_or_none()
-        if order is None:
-            logger.warning("VK Pay callback has unknown order %s", issuer_id)
-            return _vk_pay_ack(transaction_id, "payment_declined")
-        if amount != Decimal(str(order.amount)).quantize(Decimal("0.01")):
+        user_info = provider_body.get("user_info") or {}
+        service = VKPayOrderService(session)
+        if order is not None:
+            expected_amount = Decimal(str(order.amount)).quantize(Decimal("0.01"))
+            expected_user_id = order.platform_user_id
+        else:
+            product_result = await session.execute(
+                select(VKPayProductOrder).where(VKPayProductOrder.issuer_id == issuer_id)
+            )
+            product_order = product_result.scalar_one_or_none()
+            if product_order is None:
+                logger.warning("VK Pay callback has unknown order %s", issuer_id)
+                return _vk_pay_ack(transaction_id, "payment_declined")
+            expected_amount = Decimal(str(product_order.amount)).quantize(Decimal("0.01"))
+            expected_user_id = product_order.platform_user_id
+
+        if amount != expected_amount:
             logger.warning("VK Pay callback rejected: amount mismatch for order %s", issuer_id)
             return _vk_pay_ack(transaction_id, "payment_declined")
-        user_info = provider_body.get("user_info") or {}
-        if str(user_info.get("user_id", "")) != order.platform_user_id:
+        if str(user_info.get("user_id", "")) != expected_user_id:
             logger.warning("VK Pay callback rejected: payer mismatch for order %s", issuer_id)
             return _vk_pay_ack(transaction_id, "payment_declined")
         try:
-            order_status, _ticket_id = await VKPayOrderService(session).handle_transaction(provider_body)
+            if order is not None:
+                order_status, _ticket_id = await service.handle_transaction(provider_body)
+            else:
+                order_status = await service.handle_product_transaction(provider_body)
             await session.commit()
         except ValueError as exc:
             await session.rollback()
@@ -840,6 +963,11 @@ async def subscribe_me(
 
     MVP: активация подписки без реальной оплаты. Выбор tier (basic/pro).
     """
+    if current.platform is PlatformType.vk:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="В VK Mini App подписка активируется только после оплаты VK Pay",
+        )
     async with async_session_factory() as session:
         user_svc = UserService(session)
         user = await user_svc.activate_subscription(
@@ -866,6 +994,11 @@ async def purchase_event_premium(
     Даёт pro-фичи (платные билеты, QR, пригласительные) для этого события,
     независимо от подписки. Stub-оплата (как подписка): сразу completed.
     """
+    if current.platform is PlatformType.vk:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="В VK Mini App премиум мероприятия активируется только после оплаты VK Pay",
+        )
     try:
         uid = UUID(event_id)
     except ValueError:

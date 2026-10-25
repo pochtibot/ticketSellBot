@@ -17,8 +17,10 @@ from app.core.models import (
     TicketStatus,
     User,
     VKPayOrder,
+    VKPayProductOrder,
+    SubscriptionTier,
 )
-from app.core.services import EventService, TicketService
+from app.core.services import EventService, TicketService, UserService
 
 logger = logging.getLogger("ticketbot.vk_pay")
 ORDER_TTL = timedelta(minutes=15)
@@ -158,6 +160,7 @@ class VKPayOrderService:
             if order.provider_transaction_id != transaction_id:
                 raise ValueError("Для заказа уже сохранена другая транзакция")
             return order.status, str(order.ticket_id) if order.ticket_id else None
+
         if order.status not in {"pending", "expired"}:
             return order.status, None
 
@@ -292,3 +295,149 @@ class VKPayOrderService:
             "status": "success",
         })
         return order.status, str(ticket.id)
+
+    async def create_product_order(
+        self,
+        *,
+        user: User,
+        platform_user_id: str,
+        product_type: str,
+        amount: Decimal,
+        tier: SubscriptionTier | None = None,
+        event_id: uuid.UUID | None = None,
+    ) -> VKPayProductOrder:
+        """Create a fixed-price order for an organizer feature."""
+        now = datetime.now(timezone.utc)
+        if not amount.is_finite() or amount < Decimal("1.00"):
+            raise ValueError("Цена должна быть не меньше 1 ₽")
+        await self.session.execute(
+            select(User.id).where(User.id == user.id).with_for_update()
+        )
+        if product_type == "subscription":
+            if tier is None or event_id is not None:
+                raise ValueError("Для подписки нужно указать тариф")
+        elif product_type == "event_premium":
+            if event_id is None or tier is not None:
+                raise ValueError("Для премиума нужно указать мероприятие")
+            event_result = await self.session.execute(
+                select(Event).where(Event.id == event_id).with_for_update()
+            )
+            event = event_result.scalar_one_or_none()
+            if event is None or event.owner_user_id != user.id:
+                raise ValueError("Мероприятие не найдено или принадлежит другому организатору")
+            if event.date <= now:
+                raise ValueError("Мероприятие уже прошло")
+            if await EventService(self.session).get_event_is_premium(event_id):
+                raise ValueError("Премиум для мероприятия уже активен")
+        else:
+            raise ValueError("Неизвестный продукт VK Pay")
+
+        pending_result = await self.session.execute(
+            select(VKPayProductOrder).where(
+                VKPayProductOrder.user_id == user.id,
+                VKPayProductOrder.product_type == product_type,
+                VKPayProductOrder.tier == tier,
+                VKPayProductOrder.event_id == event_id,
+                VKPayProductOrder.status == "pending",
+                VKPayProductOrder.expires_at > now,
+            ).with_for_update()
+        )
+        existing = pending_result.scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        order = VKPayProductOrder(
+            issuer_id=uuid.uuid4().hex,
+            user_id=user.id,
+            platform_user_id=platform_user_id,
+            product_type=product_type,
+            tier=tier,
+            event_id=event_id,
+            amount=amount.quantize(Decimal("0.01")),
+            status="pending",
+            expires_at=now + ORDER_TTL,
+        )
+        self.session.add(order)
+        await self.session.flush()
+        return order
+
+    async def get_product_order(
+        self, issuer_id: str, user_id: uuid.UUID
+    ) -> VKPayProductOrder | None:
+        result = await self.session.execute(
+            select(VKPayProductOrder).where(
+                VKPayProductOrder.issuer_id == issuer_id,
+                VKPayProductOrder.user_id == user_id,
+            ).with_for_update()
+        )
+        order = result.scalar_one_or_none()
+        if order is not None and order.status == "pending" and order.expires_at <= datetime.now(timezone.utc):
+            order.status = "expired"
+            await self.session.flush()
+        return order
+
+    async def handle_product_transaction(self, body: dict) -> str:
+        """Idempotently fulfill an organizer product after a verified VK callback."""
+        issuer_id = str(body.get("issuer_id") or "")
+        transaction_id = str(body.get("transaction_id") or "")
+        if not issuer_id or not transaction_id:
+            raise ValueError("В уведомлении VK Pay отсутствует ID заказа или транзакции")
+        result = await self.session.execute(
+            select(VKPayProductOrder)
+            .where(VKPayProductOrder.issuer_id == issuer_id)
+            .with_for_update()
+        )
+        order = result.scalar_one_or_none()
+        if order is None:
+            raise ValueError("Заказ VK Pay не найден")
+        if order.status == "completed":
+            if order.provider_transaction_id != transaction_id:
+                raise ValueError("Для заказа уже сохранена другая транзакция")
+            return order.status
+        if order.status not in {"pending", "expired"}:
+            return order.status
+
+        provider_status = str(body.get("status") or "")
+        if provider_status in {"rejected", "expired", "hold_failed", "hold_canceled"}:
+            order.status = "failed"
+            await self.session.flush()
+            return order.status
+        if provider_status != "paid":
+            raise ValueError("Транзакция VK Pay ещё не имеет окончательного статуса")
+
+        amount = Decimal(str(body.get("amount", "0"))).quantize(Decimal("0.01"))
+        if amount != Decimal(str(order.amount)).quantize(Decimal("0.01")):
+            raise ValueError("Сумма транзакции VK Pay не совпадает с заказом")
+        if body.get("currency") != "RUB":
+            raise ValueError("Поддерживается только оплата в RUB")
+
+        if order.product_type == "subscription":
+            user = await self.session.get(User, order.user_id, with_for_update=True)
+            if user is None:
+                raise ValueError("Пользователь заказа VK Pay не найден")
+            await UserService(self.session).activate_subscription(
+                user.id, days=30, tier=order.tier,
+            )
+        elif order.product_type == "event_premium" and order.event_id is not None:
+            event = await self.session.get(Event, order.event_id, with_for_update=True)
+            if event is None or event.date <= datetime.now(timezone.utc):
+                order.status = "paid_unfulfilled"
+                order.provider_transaction_id = transaction_id
+                order.settled_at = datetime.now(timezone.utc)
+                await self.session.flush()
+                logger.error("VK Pay premium payment could not be fulfilled: issuer_id=%s", issuer_id)
+                return order.status
+            await EventService(self.session).purchase_event_premium(
+                order.event_id,
+                order.user_id,
+                amount=float(order.amount),
+                provider="vk_pay",
+            )
+        else:
+            raise ValueError("Тип заказа VK Pay не поддерживается")
+
+        order.status = "completed"
+        order.provider_transaction_id = transaction_id
+        order.settled_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return order.status

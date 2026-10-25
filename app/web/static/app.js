@@ -534,7 +534,13 @@ function renderOrganizerSections(me, channels) {
         return {
             extra: `
                 <h3 style="margin:20px 0 10px">Мои VK-группы</h3>
-                <p class="hint">Управление группами доступно в приложении.</p>`,
+                <p class="hint">Управление группами доступно в приложении.</p>
+                ${me.subscription_tier !== "pro" ? `
+                    <div class="profile-card" style="margin-top:12px">
+                        <h3>Тариф организатора</h3>
+                        <p class="hint">Pro открывает платные билеты, QR, приглашения и промокоды.</p>
+                        <button class="btn btn-primary" onclick="buyVKOrganizerSubscription('pro')">💎 Перейти на Pro</button>
+                    </div>` : ''}`,
             actions: `
                 <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
                 <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>`
@@ -1188,6 +1194,56 @@ async function startVKPayPurchase(eventId, promo) {
     } catch (err) {
         if (btn) { btn.disabled = false; btn.textContent = "✅ Подтвердить покупку"; }
         showError(err.message || "Не удалось выполнить оплату VK Pay");
+    }
+}
+
+async function startVKPayProductPurchase(product, onComplete) {
+    const bridge = window.vkBridge;
+    if (!bridge || typeof bridge.send !== "function") {
+        showError("Оплата VK Pay доступна только внутри приложения ВКонтакте");
+        return;
+    }
+    const btn = document.activeElement;
+    try {
+        const order = await api("/api/me/vk-pay-product-order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(product),
+        });
+        const accepted = await tgConfirm(
+            `Оплатить ${formatPrice(order.amount)} через VK Pay?`,
+            "Перейти к оплате",
+            "Отмена",
+        );
+        if (!accepted) return;
+
+        if (btn) btn.disabled = true;
+        const formResult = await bridge.send("VKWebAppOpenPayForm", order.payment);
+        if (!formResult || formResult.status !== true) {
+            showToast("Оплата отменена. Покупка не активирована.", true);
+            return;
+        }
+
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const current = await api(`/api/vk-pay-product-orders/${encodeURIComponent(order.order_id)}`);
+            if (current.status === "completed") {
+                showToast("✅ Оплата подтверждена. Функция активирована.");
+                if (onComplete) await onComplete();
+                return;
+            }
+            if (current.status === "failed" || current.status === "expired") {
+                throw new Error("Платёж не завершён. Покупка не активирована.");
+            }
+            if (current.status === "paid_unfulfilled") {
+                throw new Error("Оплата прошла, но функция не активирована. Обратитесь в поддержку.");
+            }
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        showToast("Платёж обрабатывается. Функция включится после подтверждения VK Pay.");
+    } catch (err) {
+        showError(err.message || "Не удалось выполнить оплату VK Pay");
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -2083,6 +2139,13 @@ async function adminToggle(eventId) {
 // C: купить премиум на одно мероприятие (единовременная оплата, stub).
 async function purchaseEventPremium(eventId) {
     if (!(await tgConfirm("Купить премиум на это мероприятие?\n\nДаст платные билеты, QR и пригласительные для этого события."))) return;
+    if (state.platform === "vk") {
+        await startVKPayProductPurchase(
+            { product_type: "event_premium", event_id: eventId },
+            () => showAdminEventDetail(eventId),
+        );
+        return;
+    }
     try {
         const res = await api(`/api/me/events/${eventId}/premium`, {
             method: "POST",
@@ -2836,6 +2899,10 @@ async function adminUserSubscribe(userId) {
 
 // Матрица ролей: пользователь → организатор (через подписку)
 async function becomeOrganizer() {
+    if (state.platform === "vk") {
+        await buyVKOrganizerSubscription("basic");
+        return;
+    }
     try {
         await api("/api/me/subscription", {
             method: "POST",
@@ -2846,6 +2913,13 @@ async function becomeOrganizer() {
         await loadMe();
         await showHome();
     } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function buyVKOrganizerSubscription(tier) {
+    await startVKPayProductPurchase(
+        { product_type: "subscription", tier },
+        async () => { await loadMe(); await showProfile(); },
+    );
 }
 
 // ─── Здоровье (super-admin) ───────────────────────────────────

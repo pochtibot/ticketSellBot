@@ -17,8 +17,9 @@
 - Организатор определяется по активной подписке пользователя и/или действующему управляемому Telegram-каналу. VK-группа влияет на `has_group`, сама по себе подписку не заменяет.
 - `has_group` — отображаемое состояние площадки; оно не является отдельным уровнем прав.
 - TG- и VK-identities могут быть связаны с одним каноническим пользователем через `UserIdentity`.
-- Пользователь может запросить подписку через `POST /me/subscription`, а организатор может купить premium для события через `POST /me/events/{event_id}/premium`. Сейчас эти маршруты активируют возможности без списания реальной оплаты.
-- VK Pay — отдельный web-поток для покупки билетов. Он доступен, когда `VK_PAY_ENABLED` и credentials настроены.
+- В Telegram `POST /me/subscription` и `POST /me/events/{event_id}/premium` остаются stub-потоками без списания реальной оплаты.
+- В VK Mini App подписка и премиум мероприятия создаются через VK Pay и активируются только подписанным callback; цены задаются серверными настройками `VK_PAY_SUBSCRIPTION_*_PRICE` и `VK_PAY_EVENT_PREMIUM_PRICE`.
+- VK Pay для покупки билетов — отдельный поток. Все VK Pay-покупки доступны, когда включён `VK_PAY_ENABLED` и настроены credentials; до merchant onboarding они выключены.
 - Супер-админские API: `/admin/users`, `/admin/channels`, `/admin/stats`, `/admin/broadcast`, `/admin/health`. Защищены `require_super_admin`.
 - Организаторские API мероприятий защищены проверкой `is_creator` и проверками владения/доступа к каналу.
 

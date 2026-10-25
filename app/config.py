@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     vk_pay_app_secure_key: Optional[str] = None
     vk_pay_merchant_private_key: Optional[str] = None
     vk_pay_notification_public_key: Optional[str] = None
+    vk_pay_subscription_basic_price: Optional[str] = None
+    vk_pay_subscription_pro_price: Optional[str] = None
+    vk_pay_event_premium_price: Optional[str] = None
     # MAX
     max_token: Optional[str] = None
 

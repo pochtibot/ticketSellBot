@@ -80,6 +80,9 @@ jobs:
           VK_PAY_APP_SECURE_KEY=${{ secrets.VK_PAY_APP_SECURE_KEY }}
           VK_PAY_MERCHANT_PRIVATE_KEY=${{ secrets.VK_PAY_MERCHANT_PRIVATE_KEY }}
           VK_PAY_NOTIFICATION_PUBLIC_KEY=${{ secrets.VK_PAY_NOTIFICATION_PUBLIC_KEY }}
+          VK_PAY_SUBSCRIPTION_BASIC_PRICE=${{ secrets.VK_PAY_SUBSCRIPTION_BASIC_PRICE }}
+          VK_PAY_SUBSCRIPTION_PRO_PRICE=${{ secrets.VK_PAY_SUBSCRIPTION_PRO_PRICE }}
+          VK_PAY_EVENT_PREMIUM_PRICE=${{ secrets.VK_PAY_EVENT_PREMIUM_PRICE }}
           DEBUG=false
           ENVEOF
           echo "✅ .env.telegram создан"
@@ -274,6 +277,31 @@ jobs:
             CREATE INDEX IF NOT EXISTS ix_vk_pay_orders_expires_at ON vk_pay_orders(expires_at);
             CREATE INDEX IF NOT EXISTS ix_vk_pay_order_event_status_expires ON vk_pay_orders(event_id, status, expires_at);
             CREATE INDEX IF NOT EXISTS ix_vk_pay_order_promo_status_expires ON vk_pay_orders(promo_code_id, status, expires_at);
+
+            -- VK Pay organizer subscriptions and event premium (migration 0017)
+            CREATE TABLE IF NOT EXISTS vk_pay_product_orders (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                issuer_id VARCHAR(128) NOT NULL UNIQUE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                platform_user_id VARCHAR(255) NOT NULL,
+                product_type VARCHAR(32) NOT NULL,
+                tier subscriptiontier,
+                event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+                amount NUMERIC(10,2) NOT NULL,
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                provider_transaction_id VARCHAR(128) UNIQUE,
+                expires_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                settled_at TIMESTAMPTZ,
+                CONSTRAINT ck_vk_pay_product_order_target CHECK (
+                    (product_type = 'subscription' AND tier IS NOT NULL AND event_id IS NULL) OR
+                    (product_type = 'event_premium' AND tier IS NULL AND event_id IS NOT NULL)
+                )
+            );
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_product_orders_user_id ON vk_pay_product_orders(user_id);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_product_orders_event_id ON vk_pay_product_orders(event_id);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_product_orders_expires_at ON vk_pay_product_orders(expires_at);
+            CREATE INDEX IF NOT EXISTS ix_vk_pay_product_user_status_expires ON vk_pay_product_orders(user_id, status, expires_at);
 
             CREATE TABLE IF NOT EXISTS event_price_ranges (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
