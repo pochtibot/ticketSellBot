@@ -349,6 +349,18 @@ def _vk_pay_is_configured() -> bool:
     return settings.vk_pay_enabled and _vk_pay_credentials_configured()
 
 
+def _vk_pay_public_status() -> dict[str, bool]:
+    """Return only product availability flags; never expose payment credentials."""
+    enabled = _vk_pay_is_configured()
+    return {
+        "enabled": enabled,
+        "ticket": enabled,
+        "subscription_basic": enabled and _vk_pay_product_price(settings.vk_pay_subscription_basic_price) is not None,
+        "subscription_pro": enabled and _vk_pay_product_price(settings.vk_pay_subscription_pro_price) is not None,
+        "event_premium": enabled and _vk_pay_product_price(settings.vk_pay_event_premium_price) is not None,
+    }
+
+
 def _vk_pay_product_price(raw: str | None) -> Decimal | None:
     if not raw:
         return None
@@ -918,6 +930,8 @@ async def get_me(current: CurrentUser = Depends(get_current_user)):
     # Telegram-labelled identity field in its profile contract.
     if current.platform is PlatformType.telegram:
         result["telegram_user_id"] = current.telegram_user_id
+    elif current.platform is PlatformType.vk:
+        result["vk_pay"] = _vk_pay_public_status()
     return result
 
 

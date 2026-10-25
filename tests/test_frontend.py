@@ -95,6 +95,16 @@ def test_vk_paid_ticket_uses_vk_pay_and_waits_for_server_confirmation():
     assert 'current.status === "paid_unfulfilled"' in APP_JS
 
 
+def test_vk_monetization_actions_require_server_readiness():
+    """VK purchase actions are available only when backend reports readiness."""
+    assert "function vkPayProductEnabled(product)" in APP_JS
+    assert 'vkPayProductEnabled("ticket")' in APP_JS
+    assert 'vkPayProductEnabled("subscription_basic")' in APP_JS
+    assert 'vkPayProductEnabled("subscription_pro")' in APP_JS
+    assert 'vkPayProductEnabled("event_premium")' in APP_JS
+    assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
+
+
 def test_appjs_vk_ticket_dm_flow():
     """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
     assert "offerVkTicketDm" in APP_JS

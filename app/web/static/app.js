@@ -413,6 +413,10 @@ function isVKMode() {
     return state.platform === "vk";
 }
 
+function vkPayProductEnabled(product) {
+    return !isVKMode() || !!(state.me && state.me.vk_pay && state.me.vk_pay[product]);
+}
+
 function showNoInitData() {
     // Кабинет открыт без данных запуска — показываем только platform-safe copy.
     updateToolbar("TicketBot", false, false);
@@ -535,7 +539,7 @@ function renderOrganizerSections(me, channels) {
             extra: `
                 <h3 style="margin:20px 0 10px">Мои VK-группы</h3>
                 <p class="hint">Управление группами доступно в приложении.</p>
-                ${me.subscription_tier !== "pro" ? `
+                ${me.subscription_tier !== "pro" && vkPayProductEnabled("subscription_pro") ? `
                     <div class="profile-card" style="margin-top:12px">
                         <h3>Тариф организатора</h3>
                         <p class="hint">Pro открывает платные билеты, QR, приглашения и промокоды.</p>
@@ -689,7 +693,9 @@ function renderHomeDashboard() {
         // Пользователь: минимальный ЛК — лента + билеты + стать организатором
         cards.push({ icon: "🎫", value: events.length, label: "Мероприятия", onclick: "showEvents()" });
         cards.push({ icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" });
-        cards.push({ icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" });
+        if (!isVKMode() || vkPayProductEnabled("subscription_basic")) {
+            cards.push({ icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" });
+        }
     } else if (state.role === "organizer") {
         // Организатор: свои мероприятия + продажи/вход + VK-площадки.
         cards.push({ icon: "🎫", value: events.length, label: "Мои мероприятия", onclick: "showAdminEvents()" });
@@ -1042,6 +1048,8 @@ function renderEvent(event) {
         buyButton = '<button class="btn btn-disabled" disabled>❌ Билеты закончились</button>';
     } else if (!event.is_active) {
         buyButton = '<button class="btn btn-disabled" disabled>🔴 Мероприятие отменено</button>';
+    } else if (isVKMode() && Number(event.price) > 0 && !vkPayProductEnabled("ticket")) {
+        buyButton = '<p class="hint">Продажа билетов через VK Pay пока недоступна</p>';
     } else {
         buyButton = `<button class="btn btn-primary btn-lg" onclick="showConfirm('${event.id}')">🎟 Купить билет — ${formatPrice(event.price)}</button>`;
     }
@@ -1111,6 +1119,10 @@ function showConfirm(eventId) {
 }
 
 async function confirmBuy(eventId) {
+    if (isVKMode() && Number(state.currentEvent && state.currentEvent.price) > 0 && !vkPayProductEnabled("ticket")) {
+        showError("Продажа билетов через VK Pay пока недоступна");
+        return;
+    }
     const btn = document.getElementById("confirmBtn");
     btn.disabled = true;
     btn.textContent = "⏳ Оформление...";
@@ -1198,6 +1210,13 @@ async function startVKPayPurchase(eventId, promo) {
 }
 
 async function startVKPayProductPurchase(product, onComplete) {
+    const availabilityKey = product.product_type === "event_premium"
+        ? "event_premium"
+        : `subscription_${product.tier}`;
+    if (!vkPayProductEnabled(availabilityKey)) {
+        showError("Оплата VK Pay для этой функции пока недоступна");
+        return;
+    }
     const bridge = window.vkBridge;
     if (!bridge || typeof bridge.send !== "function") {
         showError("Оплата VK Pay доступна только внутри приложения ВКонтакте");
@@ -1912,7 +1931,11 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
-            ${!event.is_premium ? `<button class="btn btn-sm btn-primary" onclick="purchaseEventPremium('${event.id}')">💎 Премиум за событие</button>` : '<span class="badge badge-tier-pro">💎 Премиум</span>'}
+            ${!event.is_premium
+                ? (vkPayProductEnabled("event_premium")
+                    ? `<button class="btn btn-sm btn-primary" onclick="purchaseEventPremium('${event.id}')">💎 Премиум за событие</button>`
+                    : (isVKMode() ? '<span class="hint">Премиум мероприятия через VK Pay пока недоступен</span>' : ''))
+                : '<span class="badge badge-tier-pro">💎 Премиум</span>'}
         </div>
         <button class="btn btn-secondary" onclick="showAdminEvents()">← К списку</button>
     `;
@@ -2881,6 +2904,10 @@ async function adminUserSubscribe(userId) {
 // Матрица ролей: пользователь → организатор (через подписку)
 async function becomeOrganizer() {
     if (state.platform === "vk") {
+        if (!vkPayProductEnabled("subscription_basic")) {
+            showError("Оплата подписки через VK Pay пока недоступна");
+            return;
+        }
         await buyVKOrganizerSubscription("basic");
         return;
     }
@@ -2897,6 +2924,10 @@ async function becomeOrganizer() {
 }
 
 async function buyVKOrganizerSubscription(tier) {
+    if (!vkPayProductEnabled(`subscription_${tier}`)) {
+        showError("Оплата подписки через VK Pay пока недоступна");
+        return;
+    }
     await startVKPayProductPurchase(
         { product_type: "subscription", tier },
         async () => { await loadMe(); await showProfile(); },

@@ -186,6 +186,17 @@ class TestRateLimit:
             resp = client.get("/api/me")
             assert resp.status_code == 429
 
+    def test_rate_limit_uses_nginx_real_ip(self, client):
+        """Requests from different users must not share the proxy container IP bucket."""
+        with patch("app.config.settings.rate_limit_per_minute", 1):
+            first = client.get("/api/me", headers={"X-Real-IP": "198.51.100.10"})
+            second = client.get("/api/me", headers={"X-Real-IP": "198.51.100.11"})
+            repeated = client.get("/api/me", headers={"X-Real-IP": "198.51.100.10"})
+
+        assert first.status_code == 401
+        assert second.status_code == 401
+        assert repeated.status_code == 429
+
 
 # ═══════════════════════════════════════════════════════════════
 # API Endpoint Tests
@@ -1936,8 +1947,11 @@ class TestCoverageGaps:
         assert resp.status_code == 200
         assert resp.json()["platform"] == "vk"
 
-    def test_vk_me_profile_contract(self, client):
+    def test_vk_me_profile_contract(self, client, monkeypatch):
         """GET /api/me exposes platform-neutral identity for VK."""
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "vk_pay_enabled", False)
         current = Mock()
         current.user_id = _UUID(USER_ID)
         current.telegram_user_id = "5305539"
@@ -1966,6 +1980,13 @@ class TestCoverageGaps:
         assert data["platform_user_id"] == "5305539"
         assert "telegram_user_id" not in data
         assert data["channels"] == []
+        assert data["vk_pay"] == {
+            "enabled": False,
+            "ticket": False,
+            "subscription_basic": False,
+            "subscription_pro": False,
+            "event_premium": False,
+        }
 
     def test_telegram_me_profile_contract_legacy_context(self, client):
         """Legacy Telegram profile contract remains unchanged."""
@@ -1977,6 +1998,7 @@ class TestCoverageGaps:
         assert resp.status_code == 200
         assert resp.json()["telegram_user_id"] == "12345"
         assert resp.json()["platform"] == "telegram"
+        assert "vk_pay" not in resp.json()
 
 
 class TestSubscriptionApi:
