@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 VK_PAY_VERSION = 2
 VK_PAY_NOTIFICATION_VERSION = "2-03"
+VK_PAY_SELLER_API_VERSION = "2-03"
 
 
 def _canonical_value(value: Any) -> str:
@@ -40,6 +41,63 @@ def _merchant_sign(merchant_data: str, merchant_private_key: str) -> str:
     # VK's published signing vector is a 40-character SHA-1 digest, despite
     # the prose in the current page referring to SHA-256.
     return hashlib.sha1((merchant_data + merchant_private_key).encode("utf-8")).hexdigest()
+
+
+def build_refund_body(
+    *,
+    transaction_id: str,
+    amount: str | Decimal,
+    reason: str,
+    issuer_id: str,
+    merchant_param: str | None = None,
+) -> dict[str, Any]:
+    """Build the documented VK Pay Seller API refund body.
+
+    The caller supplies the positive amount to return; VK's request schema
+    represents it as a negative RUB amount. This builds only the documented
+    body, not the Seller API transport envelope/signature whose refund method
+    details are not available in the public contract we verified.
+    """
+    transaction_id = str(transaction_id).strip()
+    reason = str(reason).strip()
+    issuer_id = str(issuer_id).strip()
+    if not transaction_id or not reason or not issuer_id:
+        raise ValueError("Для возврата VK Pay нужны transaction_id, reason и issuer_id")
+
+    try:
+        raw_amount = Decimal(str(amount))
+        refund_amount = raw_amount.quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Некорректная сумма возврата VK Pay") from exc
+    if not raw_amount.is_finite() or refund_amount <= 0:
+        raise ValueError("Сумма возврата VK Pay должна быть положительной")
+    if raw_amount != refund_amount:
+        raise ValueError("Сумма возврата VK Pay должна быть указана с точностью до копеек")
+
+    body: dict[str, Any] = {
+        "transaction_id": transaction_id,
+        "amount": float(-refund_amount),
+        "currency": "RUB",
+        "reason": reason,
+        "issuer_id": issuer_id,
+    }
+    if merchant_param is not None:
+        body["merchant_param"] = str(merchant_param)
+    return body
+
+
+def is_successful_refund_response(
+    response: dict[str, Any], *, transaction_id: str
+) -> bool:
+    """Recognize the documented successful refund response example."""
+    action_param = response.get("action_param")
+    return (
+        str(response.get("transaction_id") or "") == str(transaction_id)
+        and response.get("action") == "stop"
+        and isinstance(action_param, dict)
+        and action_param.get("status") == "success"
+        and str(action_param.get("is_reverse", "")).lower() == "true"
+    )
 
 
 def build_open_pay_form_params(
