@@ -287,7 +287,7 @@ def test_appjs_role_menu():
     """Ролевые карточки главной + минимальный ЛК пользователя."""
     assert "Стать организатором" in APP_JS
     assert "becomeOrganizer" in APP_JS
-    assert "Мои мероприятия" in APP_JS
+    assert 'onclick: "showAdminEvents()"' in APP_JS
     assert "Мои площадки" in APP_JS
     assert "showAdminDashboard" in APP_JS
 

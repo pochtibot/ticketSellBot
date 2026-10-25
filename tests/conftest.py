@@ -21,7 +21,6 @@ os.environ.setdefault("ALLOW_SKIP_AUTH", "true")
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     create_async_engine,
@@ -64,42 +63,27 @@ async def test_engine():
 
 @pytest_asyncio.fixture
 async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
-    """Асинхронная сессия с изоляцией через SAVEPOINT.
+    """Session bound to an outer transaction, rolled back after the test.
 
-    Схема:
-    1. Открываем соединение и внешнюю транзакцию (BEGIN)
-    2. Создаём SAVEPOINT внутри неё
-    3. Тест может делать commit() — он закоммитит savepoint,
-       а мы пересоздадим savepoint сразу после
-    4. В конце rollback внешней транзакции откатывает всё
+    SQLAlchemy's ``create_savepoint`` join mode keeps explicit ``commit()``
+    calls inside the fixture's external transaction without monkey-patching
+    Session internals. The outer rollback discards all test data.
     """
     connection = await test_engine.connect()
     transaction = await connection.begin()
-
     session = AsyncSession(
         bind=connection,
         expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
     )
 
-    # Создаём начальный savepoint
-    await connection.execute(text("SAVEPOINT test_sp"))
-
-    # Перехватываем commit: превращаем его в коммит savepoint
-    # с немедленным пересозданием
-    original_commit = session.commit
-
-    async def savepoint_commit():
-        await original_commit()
-        # После commit savepoint освобождён — создаём новый
-        await connection.execute(text("SAVEPOINT test_sp"))
-
-    session.commit = savepoint_commit
-
-    yield session
-
-    await session.close()
-    await transaction.rollback()
-    await connection.close()
+    try:
+        yield session
+    finally:
+        await session.close()
+        if transaction.is_active:
+            await transaction.rollback()
+        await connection.close()
 
 
 @pytest_asyncio.fixture

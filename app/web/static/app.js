@@ -45,7 +45,7 @@ function closeAppDialog(result) {
     dialog.resolve(result);
 }
 
-function openAppDialog({ mode = "alert", title = "TicketBot", message = "", defaultValue = "", primaryText = "ОК", secondaryText = "Отмена" }) {
+function openAppDialog({ mode = "alert", title = "Билетёр", message = "", defaultValue = "", primaryText = "ОК", secondaryText = "Отмена" }) {
     if (appDialogState) closeAppDialog(mode === "confirm" || mode === "prompt" ? null : undefined);
     const overlay = document.getElementById("appDialogOverlay");
     const titleEl = document.getElementById("appDialogTitle");
@@ -104,7 +104,7 @@ function tgShowPopup(title, message, buttons) {
     const tg = window.Telegram && window.Telegram.WebApp;
     if (tg && tg.showPopup) {
         return new Promise(resolve => tg.showPopup({
-            title: title || "TicketBot", message: message || "",
+            title: title || "Билетёр", message: message || "",
             buttons: buttons || [{ type: "close" }],
         }, resolve));
     }
@@ -136,7 +136,7 @@ function tgAlert(message) {
     if (tg && tg.showAlert) {
         return new Promise(resolve => tg.showAlert({ message }, resolve));
     }
-    return openAppDialog({ mode: "alert", title: "TicketBot", message });
+    return openAppDialog({ mode: "alert", title: "Билетёр", message });
 }
 
 
@@ -321,7 +321,7 @@ function isTablet() {
 }
 
 function showTabletStub() {
-    updateHeader("TicketBot");
+    updateHeader("Главная");
     showPage("tablet");
     document.getElementById("tabBar").style.display = "none";
 }
@@ -419,7 +419,7 @@ function vkPayProductEnabled(product) {
 
 function showNoInitData() {
     // Кабинет открыт без данных запуска — показываем только platform-safe copy.
-    updateToolbar("TicketBot", false, false);
+    updateToolbar("Главная", false, false);
     showPage("events");
 
     const content = isVKMode()
@@ -662,7 +662,7 @@ function setActiveTab(tabId) {
 async function showHome() {
     if (!state.me) { try { await loadMe(); } catch (e) { showError("Не удалось загрузить профиль"); return; } }
     setActiveTab("home");
-    updateHeader("TicketBot");
+    updateHeader("Главная");
     showPage("home");
     showLoading();
 
@@ -682,71 +682,102 @@ async function showHome() {
 function renderHomeDashboard() {
     const container = document.getElementById("homeContent");
     const me = state.me || {};
-
     const events = state.events || [];
     const tickets = state.tickets || [];
     const channels = me.channels || [];
 
-    // Матрица ролей: ролевые карточки главной
-    let cards = [];
+    let shortcuts = [];
     if (state.role === "user") {
-        // Пользователь: минимальный ЛК — лента + билеты + стать организатором
-        cards.push({ icon: "🎫", value: events.length, label: "Мероприятия", onclick: "showEvents()" });
-        cards.push({ icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" });
+        shortcuts.push({ icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" });
         if (!isVKMode() || vkPayProductEnabled("subscription_basic")) {
-            cards.push({ icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" });
+            shortcuts.push({ icon: "✨", value: "Организатор", label: "Создавать события", onclick: "becomeOrganizer()" });
         }
     } else if (state.role === "organizer") {
-        // Организатор: свои мероприятия + продажи/вход + VK-площадки.
-        cards.push({ icon: "🎫", value: events.length, label: "Мои мероприятия", onclick: "showAdminEvents()" });
-        cards.push({ icon: "🔍", value: "Вход", label: "Продажи / Вход", onclick: "showCheckin()" });
+        shortcuts.push({ icon: "🎫", value: "События", label: "Управление", onclick: "showAdminEvents()" });
+        shortcuts.push({ icon: "🔍", value: "Билеты", label: "Проверка на входе", onclick: "showCheckin()" });
         if (isVKMode()) {
-            cards.push({ icon: "📢", value: (me.vk_group_ids || []).length, label: "VK-группы", onclick: "showMyVKGroups()" });
+            shortcuts.push({ icon: "📢", value: (me.vk_group_ids || []).length, label: "VK-группы", onclick: "showMyVKGroups()" });
         } else {
-            cards.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
+            shortcuts.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
         }
     } else if (!isVKMode()) {
-        // Супер-админские инструменты доступны только в Telegram-контуре.
-        cards.push({ icon: "🔍", value: "—", label: "Поиск по коду", onclick: "showCheckin()" });
-        cards.push({ icon: "📊", value: "—", label: "Статистика", onclick: "showAdminStats()" });
-        cards.push({ icon: "📣", value: "—", label: "Рассылка", onclick: "showBroadcast()" });
-        cards.push({ icon: "👥", value: "—", label: "Подписки", onclick: "showUserInfo()" });
-        cards.push({ icon: "🩺", value: "—", label: "Здоровье", onclick: "showAdminHealth()" });
+        shortcuts.push({ icon: "🔍", value: "Поиск", label: "Проверка билета", onclick: "showCheckin()" });
+        shortcuts.push({ icon: "📊", value: "Статистика", label: "Показатели сервиса", onclick: "showAdminStats()" });
+        shortcuts.push({ icon: "📣", value: "Рассылка", label: "Сообщения пользователям", onclick: "showBroadcast()" });
+        shortcuts.push({ icon: "👥", value: "Подписки", label: "Организаторы", onclick: "showUserInfo()" });
+        shortcuts.push({ icon: "🩺", value: "Здоровье", label: "Состояние сервиса", onclick: "showAdminHealth()" });
     }
 
     // A VK user with a stale role response must never see global admin tools.
     if (isVKMode() && state.role === "super_admin") {
         state.role = "user";
-        cards = [
-            { icon: "🎫", value: events.length, label: "Мероприятия", onclick: "showEvents()" },
+        shortcuts = [
             { icon: "🎟", value: tickets.length, label: "Мои билеты", onclick: "showMyTickets()" },
-            { icon: "🚀", value: "—", label: "Стать организатором", onclick: "becomeOrganizer()" },
         ];
-    }
-
-    let html = `<h2 style="padding:16px 16px 0">Привет, ${escapeHtml(me.name || 'Гость')}!</h2>`;
-    html += `<p style="padding:0 16px 12px;color:var(--tg-hint)">${roleLabel(state.role)}</p>`;
-    html += `<div class="dashboard-grid">`;
-    for (const c of cards) {
-        html += `
-            <div class="dashboard-card" onclick="${c.onclick}">
-                <div class="dashboard-card-icon">${c.icon}</div>
-                <div class="dashboard-card-value">${c.value}</div>
-                <div class="dashboard-card-label">${c.label}</div>
-            </div>`;
-    }
-    html += `</div>`;
-
-    // Список мероприятий на главной
-    if (events.length > 0) {
-        html += `<div class="section-header">📋 Ближайшие мероприятия</div>`;
-        for (const e of events.slice(0, 3)) {
-            html += `
-                <div class="event-card" style="margin:0 16px 8px" onclick="showEventDetail('${e.id}')">
-                    <h3>${escapeHtml(e.title)}</h3>
-                    <div class="hint">📅 ${formatDate(e.date)} · ${e.price > 0 ? formatPrice(e.price) : 'Бесплатно'} · ${e.available_tickets}/${e.total_tickets}</div>
-                </div>`;
+        if (vkPayProductEnabled("subscription_basic")) {
+            shortcuts.push({ icon: "✨", value: "Организатор", label: "Создавать события", onclick: "becomeOrganizer()" });
         }
+    }
+
+    let html = `
+        <section class="home-brand">
+            <span class="home-brand-mark">🎟</span>
+            <div><h1>Билетёр</h1><p>Афиша событий и билеты</p></div>
+        </section>
+        <div class="home-intro">
+            <h2>Куда пойдём${me.name ? `, ${escapeHtml(me.name)}` : ""}?</h2>
+            <p>Выбирайте события и храните билеты здесь</p>
+        </div>
+        <button class="home-browse-button" onclick="showEvents()">Смотреть афишу <span>→</span></button>
+    `;
+
+    if (events.length > 0) {
+        const featured = events[0];
+        const featuredPoster = featured.media_file_id
+            ? `<img src="/api/events/${encodeURIComponent(featured.id)}/media" alt="" loading="lazy">`
+            : `<div class="home-feature-art-fallback"><span>✦</span></div>`;
+        html += `
+            <div class="home-section-heading"><h2>Ближайшие события</h2><button onclick="showEvents()">Вся афиша <span>→</span></button></div>
+            <article class="home-feature-card" onclick="showEventDetail('${featured.id}')">
+                <div class="home-feature-art">${featuredPoster}<span class="home-feature-label">Ближайшее событие</span></div>
+                <div class="home-feature-body">
+                    <div class="home-feature-meta">📅 ${formatDate(featured.date)}${featured.location ? ` <span>·</span> 📍 ${escapeHtml(featured.location)}` : ""}</div>
+                    <div class="home-feature-title-row"><h3>${escapeHtml(featured.title)}</h3><strong>${Number(featured.price) > 0 ? `от ${formatPrice(featured.price)}` : "Бесплатно"}</strong></div>
+                    <button class="home-feature-action" onclick="event.stopPropagation(); showEventDetail('${featured.id}')">Подробнее о событии</button>
+                </div>
+            </article>
+        `;
+
+        if (events.length > 1) {
+            html += `<div class="home-section-heading home-section-secondary"><h2>Скоро</h2><button onclick="showEvents()">Все события <span>→</span></button></div><div class="home-upcoming-list">`;
+            for (const event of events.slice(1, 3)) {
+                html += `
+                    <button class="home-upcoming-card" onclick="showEventDetail('${event.id}')">
+                        <span class="home-upcoming-icon">${event.media_file_id ? "🎭" : "✦"}</span>
+                        <span class="home-upcoming-copy"><strong>${escapeHtml(event.title)}</strong><small>${formatDate(event.date)} · ${Number(event.price) > 0 ? formatPrice(event.price) : "Бесплатно"}</small></span>
+                        <span class="home-upcoming-arrow">›</span>
+                    </button>
+                `;
+            }
+            html += `</div>`;
+        }
+    } else {
+        html += `<section class="home-empty-events"><span>🎫</span><h2>Афиша скоро пополнится</h2><p>Загляните позже — новые события появятся здесь.</p></section>`;
+    }
+
+    if (shortcuts.length) {
+        html += `<div class="home-section-heading home-section-secondary"><h2>${state.role === "organizer" ? "Для организатора" : "Ваш аккаунт"}</h2></div><div class="home-shortcuts">`;
+    }
+    for (const c of shortcuts) {
+        html += `
+            <button class="home-shortcut" onclick="${c.onclick}">
+                <span class="home-shortcut-icon">${c.icon}</span>
+                <span class="home-shortcut-copy"><strong>${c.value}</strong><small>${c.label}</small></span>
+                <span class="home-upcoming-arrow">›</span>
+            </button>`;
+    }
+    if (shortcuts.length) {
+        html += `</div>`;
     }
 
     container.innerHTML = html;
@@ -758,7 +789,8 @@ function roleLabel(role) {
 }
 
 function updateHeader(title) {
-    document.getElementById("headerTitle").textContent = title;
+    const headerTitle = document.getElementById("headerTitle");
+    if (headerTitle) headerTitle.textContent = title === "TicketBot" ? "Главная" : title;
 }
 
 async function showAdminUserList() {
@@ -889,6 +921,7 @@ async function api(path, options = {}) {
 // ─── Navigation ─────────────────────────────────────────────────
 
 function showPage(pageId) {
+    document.getElementById("app")?.classList.toggle("home-active", pageId === "home");
     document.querySelectorAll(".page").forEach(p => { p.classList.remove("active"); p.classList.remove("page-enter"); });
     const page = document.getElementById(`page-${pageId}`);
     if (page) {

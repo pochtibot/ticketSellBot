@@ -32,10 +32,29 @@ def client():
     with (
         patch("app.web.server.init_db", new_callable=AsyncMock),
         patch("app.web.server.close_db", new_callable=AsyncMock),
+        patch("app.web.routes.async_session_factory", _fake_async_session_factory()),
+        patch("app.web.dependencies.async_session_factory", _fake_async_session_factory()),
         patch("app.web.routes.VKPayOrderService.reserved_seats_map", new_callable=AsyncMock, return_value={}),
         TestClient(app) as c,
     ):
         yield c
+
+
+def _fake_async_session_factory():
+    """Session context for API tests that mock every service touching storage."""
+    class _Session:
+        commit = AsyncMock()
+        rollback = AsyncMock()
+        execute = AsyncMock()
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return _Session()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    return _SessionContext
 
 
 def make_valid_init_data(bot_token: str, user_id: int = 12345, **extra) -> str:
@@ -508,6 +527,7 @@ class TestAPIEndpoints:
         ]
 
         with (
+            patch("app.web.routes.async_session_factory", _fake_async_session_factory()),
             patch("app.web.routes.UserService.get_or_create", new_callable=AsyncMock) as mock_user,
             patch("app.web.routes.TicketService.get_user_tickets", new_callable=AsyncMock) as mock_tickets_svc,
         ):
@@ -919,6 +939,7 @@ class TestAdminAPI:
 
         with (
             admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
+            patch("app.web.routes.async_session_factory", _fake_async_session_factory()),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.get_event_stats", new_callable=AsyncMock, return_value={"total_tickets": 10, "sold": 2}),
         ):
@@ -1061,11 +1082,12 @@ class TestSuperAdminGaps:
         """GET /api/admin/health — статус, username, БД."""
         with (
             admin_auth(is_super=True, channel_ids=[]),
+            patch("app.web.routes.async_session_factory", _fake_async_session_factory()),
             patch("app.web.routes.get_telegram_bot", return_value=Mock()),
         ):
             resp = client.get("/api/admin/health", headers={"X-Skip-Auth": "1"})
-        # Запрос к реальной БД может вернуть 500 в тесте — проверяем только код
-        assert resp.status_code in (200, 500)
+        assert resp.status_code == 200
+        assert resp.json()["db_ok"] is True
 
     def test_admin_health_forbidden(self, client):
         """GET /api/admin/health — 403 для channel-admin."""
@@ -1162,6 +1184,7 @@ class TestInviteApi:
 
         with (
             admin_auth(is_super=False, channel_ids=[_UUID(CHANNEL_ID)]),
+            patch("app.web.routes.async_session_factory", _fake_async_session_factory()),
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=mock_event),
             patch("app.web.routes.EventService.has_event_pro_feature", new_callable=AsyncMock, return_value=True),
             patch("app.web.routes.TicketService.issue_invite", new_callable=AsyncMock, return_value=mock_invite),

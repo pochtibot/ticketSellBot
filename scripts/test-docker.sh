@@ -37,10 +37,15 @@ fi
 # В общей Docker-сети БД доступна по имени контейнера, а не через localhost хоста.
 DB_HOST="${TICKETBOT_TEST_DB_HOST:-$DB_CONTAINER}"
 DB_URL="postgresql+asyncpg://postgres:${DB_PASSWORD_VK:-postgres}@${DB_HOST}:5432/ticketbot_test"
+PYTHON_TRACE_ARGS=()
+if [ -n "${PYTHONTRACEMALLOC:-}" ]; then
+  PYTHON_TRACE_ARGS=(-e "PYTHONTRACEMALLOC=${PYTHONTRACEMALLOC}")
+fi
 
 docker run --rm --network "$NETWORK" --entrypoint pytest \
   -v "$PWD:/app" -w /app \
   -e PYTHONPATH=/app \
   -e DATABASE_URL="$DB_URL" \
   -e TEST_DATABASE_URL="$DB_URL" \
+  "${PYTHON_TRACE_ARGS[@]}" \
   "$IMAGE" "$@" --timeout=60
