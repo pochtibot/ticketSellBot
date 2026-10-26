@@ -1297,12 +1297,18 @@ async def remove_my_vk_group(
 
 
 @router.get("/admin/events")
-async def admin_list_events(current: CurrentUser = Depends(require_admin)):
+async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
     """Список мероприятий организатора (свои каналы + owner-мероприятия).
 
     Матрица ролей: только организатор. Суперадмин НЕ управляет мероприятиями
     (пусто). Обычный пользователь — 403 (нет доступа к панели).
     """
+    if not current.is_creator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Нет доступа к мероприятиям организатора",
+        )
+
     async with async_session_factory() as session:
         event_svc = EventService(session)
         channel_svc = ChannelService(session)
@@ -1478,6 +1484,12 @@ async def admin_update_event(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         if not data:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет полей для обновления")
+        if current.platform is PlatformType.vk and data.get("price", event.price) > 0:
+            if not await event_svc.has_event_pro_feature(uid, "paid_events"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Платные билеты доступны после подключения Pro",
+                )
         try:
             event = await event_svc.update(uid, **data)
             await session.commit()

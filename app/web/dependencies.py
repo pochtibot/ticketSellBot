@@ -205,7 +205,7 @@ class CurrentUser:
     def role(self) -> str:
         if self.is_super_admin:
             return "super_admin"
-        if self.is_organizer or self.managed_channel_ids:
+        if self.is_organizer or self.managed_channel_ids or self.platform is PlatformType.vk:
             return "organizer"
         return "user"
 
@@ -215,7 +215,11 @@ class CurrentUser:
 
         Суперадмин эксклюзивен — он не организатор (role=super_admin приоритетен).
         """
-        return not self.is_super_admin and (self.is_organizer or bool(self.managed_channel_ids))
+        return not self.is_super_admin and (
+            self.is_organizer
+            or bool(self.managed_channel_ids)
+            or self.platform is PlatformType.vk
+        )
 
     @property
     def organizer_with_group(self) -> bool:

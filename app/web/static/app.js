@@ -596,6 +596,11 @@ function renderProfile() {
         const sections = renderOrganizerSections(me, channels);
         extraSections = sections.extra;
         actionButtons = sections.actions;
+        if (isVKMode()) {
+            actionButtons = `
+                <button class="btn btn-primary" onclick="showAdminEventForm()">🎟 Стать организатором бесплатного мероприятия</button>
+                ${actionButtons}`;
+        }
     } else if (!isVKMode()) {
         actionButtons = `
             <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
@@ -1690,8 +1695,9 @@ async function showAdminEventForm(eventId) {
                 <div class="hint" style="margin:4px 0 0">Организатор отвечает за корректность маркировки и допуск лиц до 18 лет</div>
             </div>
             <div class="form-field">
-                <label class="form-label">Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}</label>
+                <label class="form-label">${isVKMode() && !canPaid ? 'Бесплатный билет' : `Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}`}</label>
                 <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${canPaid ? '' : 'disabled'}>
+                ${isVKMode() && !canPaid ? '<div class="hint" style="margin:4px 0 0">Для бесплатных организаторов доступно создание бесплатных билетов</div>' : ''}
             </div>
             ${canPaid ? `
             <div class="form-field">
