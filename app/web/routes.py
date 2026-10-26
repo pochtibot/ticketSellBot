@@ -1303,7 +1303,7 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
     Матрица ролей: только организатор. Суперадмин НЕ управляет мероприятиями
     (пусто). Обычный пользователь — 403 (нет доступа к панели).
     """
-    if not current.is_creator:
+    if not current.is_creator and not current.is_super_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Нет доступа к мероприятиям организатора",
