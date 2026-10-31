@@ -5,7 +5,7 @@
 
 services:
   db:
-    ports: []  # Не пробрасываем порт БД наружу в продакшене
+    ports: !reset []  # Не пробрасываем порт БД наружу в продакшене
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ticketbot"]
       interval: 10s
@@ -45,7 +45,7 @@ services:
   web:
     restart: always
     volumes: []
-    ports: []  # За reverse proxy (Caddy/Nginx)
+    ports: !reset []  # За reverse proxy (Caddy/Nginx)
     logging:
       driver: "json-file"
       options:

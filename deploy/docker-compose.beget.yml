@@ -9,7 +9,7 @@
 
 services:
   db:
-    ports: []  # Не открываем порт БД наружу
+    ports: !reset []  # База доступна только внутри Docker-сети
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -64,7 +64,7 @@ services:
   web:
     restart: always
     volumes: []
-    ports: []  # За reverse proxy (Caddy/Nginx)
+    ports: !reset []  # Веб-приложение доступно только через reverse proxy
     logging:
       driver: "json-file"
       options:
