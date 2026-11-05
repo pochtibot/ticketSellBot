@@ -60,6 +60,10 @@ def test_appjs_has_linking_ui():
     assert "/api/me/link" in APP_JS
 
 
+def test_vk_profile_exposes_account_linking_action():
+    assert 'onclick="linkVKByCode()">🔗 Связать VK с Telegram' in APP_JS
+
+
 def test_appjs_initvk_handles_direct_object():
     # vk-bridge 3.x возвращает VKWebAppGetLaunchParams как объект НАПРЯМУЮ
     # (без обёртки launch_params): { vk_user_id, vk_ts, sign, ... }.
