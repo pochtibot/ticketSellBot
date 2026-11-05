@@ -20,6 +20,29 @@ from app.core.crypto import encrypt_token, decrypt_token
 TEST_KEY = Fernet.generate_key().decode()
 
 
+async def test_verify_group_token_accepts_vk_groups_get_by_id_response():
+    """VK API v5.199 returns groups.getById results in response.groups."""
+    from app.web.vk_api import verify_group_token
+
+    with patch(
+        "app.web.vk_api.vk_api_call",
+        new_callable=AsyncMock,
+        return_value={"groups": [{"id": 34696799, "name": "Organizer community"}], "profiles": []},
+    ):
+        assert await verify_group_token("34696799", "community-token") is True
+
+
+async def test_verify_group_token_rejects_different_group_id():
+    from app.web.vk_api import verify_group_token
+
+    with patch(
+        "app.web.vk_api.vk_api_call",
+        new_callable=AsyncMock,
+        return_value={"groups": [{"id": 123456}], "profiles": []},
+    ):
+        assert await verify_group_token("654321", "community-token") is False
+
+
 @pytest.fixture
 def crypto_key():
     with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):

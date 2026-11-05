@@ -52,9 +52,10 @@ async def verify_group_token(group_id: str, token: str) -> bool:
         logger.warning("verify_group_token failed for group %s: %s", group_id, e)
         return False
 
-    # Формат ответа: современный {"count": N, "items": [...]} или устаревший [...]
+    # groups.getById v5.199 returns {"groups": [...], "profiles": [...]};
+    # keep compatibility with wrappers/older responses that use items or a list.
     if isinstance(response, dict):
-        items = response.get("items") or []
+        items = response.get("groups") or response.get("items") or []
     elif isinstance(response, list):
         items = response
     else:
