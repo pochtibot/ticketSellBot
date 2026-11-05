@@ -2690,14 +2690,17 @@ async function addMyVKGroup() {
 
     try {
         // Токен группы выдаётся администратору после выбора сообщества.
-        const tokenResult = await window.vkBridge.send("VKWebAppGetCommunityToken", {
-            app_id: parseInt(state.vkAppId, 10) || undefined,
-            group_id: Number(groupId),
-            scope: "wall,messages,manage,photos,app_widget",
-        });
-        const communityToken = (tokenResult && tokenResult.access_token) || "";
-        if (!communityToken) {
-            throw new Error("VK не вернул токен сообщества");
+        let communityToken = "";
+        try {
+            const tokenResult = await window.vkBridge.send("VKWebAppGetCommunityToken", {
+                app_id: parseInt(state.vkAppId, 10) || undefined,
+                group_id: Number(groupId),
+                scope: "wall,messages,manage,photos,app_widget",
+            });
+            communityToken = (tokenResult && tokenResult.access_token) || "";
+        } catch (_) {
+            // Сохраняем выбранное сообщество и без токена: его можно будет
+            // увидеть и удалить из кабинета, а доступ запросить повторно.
         }
 
         // Имя подтягиваем из VK, но оно необязательно для сохранения связи.
@@ -2707,24 +2710,35 @@ async function addMyVKGroup() {
             title = (info && info.name) || null;
         } catch (_) {}
 
-        await api("/api/me/vk-groups", {
+        const registerGroup = token => api("/api/me/vk-groups", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: groupId, title, community_token: communityToken }),
+            body: JSON.stringify({
+                group_id: groupId,
+                title,
+                ...(token ? { community_token: token } : {}),
+            }),
         });
+
+        try {
+            await registerGroup(communityToken);
+        } catch (e) {
+            // Если VK выдал токен, но сервер не смог подтвердить его,
+            // всё равно регистрируем сообщество без прав публикации.
+            if (!communityToken || !String(e.message).includes("Не удалось подтвердить токен")) throw e;
+            communityToken = "";
+            await registerGroup("");
+        }
+
         hideLoading();
-        showToast("✅ Сообщество VK подключено");
+        showToast(communityToken
+            ? "✅ Сообщество VK подключено"
+            : "Сообщество добавлено в кабинет без токена. Его можно удалить; публикация заработает после выдачи доступа.", !communityToken);
         await showMyVKGroups();
     } catch (e) {
         hideLoading();
         const message = e.message || "Ошибка добавления VK-группы";
-        if (message.includes("Не удалось подтвердить токен")) {
-            showToast("VK не подтвердил доступ к выбранному сообществу. Проверьте права администратора.", true);
-        } else if (message.includes("токен сообщества")) {
-            showToast("VK не выдал доступ. Проверьте, что вы администратор сообщества, и повторите выбор.", true);
-        } else {
-            showToast(message, true);
-        }
+        showToast(message, true);
     }
 }
 
