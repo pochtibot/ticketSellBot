@@ -1091,10 +1091,7 @@ class VKGroupService:
                     existing.title = title
                 await self.session.flush()
                 return existing
-            raise ValueError(
-                "Группа уже подключена к другому аккаунту. Если это ваша группа, "
-                "свяжите профили Telegram и VK и повторите попытку."
-            )
+            raise ValueError("Группа уже зарегистрирована другим организатором")
 
         from app.core.crypto import encrypt_token
         group = VKGroup(

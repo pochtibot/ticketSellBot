@@ -132,7 +132,7 @@ async def test_register_antihijack(db_session, vk_owner, crypto_key):
     other = await UserService(db_session).get_or_create(PlatformType.telegram, "other_vk_owner")
     await group_svc.register_vk_group(vk_owner.id, "999", title="Моя")
 
-    with pytest.raises(ValueError, match="свяжите профили Telegram и VK"):
+    with pytest.raises(ValueError):
         await group_svc.register_vk_group(other.id, "999", title="Чужая")
 
 

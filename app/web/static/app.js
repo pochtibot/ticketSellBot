@@ -607,12 +607,6 @@ function renderProfile() {
             <button class="btn btn-primary" onclick="showHome()">🛠 Инструменты (главная)</button>`;
     }
 
-    if (isVKMode()) {
-        actionButtons += `
-            <p class="hint" style="margin:8px 0 0">Если VK-группа уже подключена в Telegram, свяжите аккаунты, чтобы управлять ей из VK.</p>
-            <button class="btn btn-secondary" onclick="linkVKByCode()">🔗 Связать VK с Telegram</button>`;
-    }
-
     const identifierLabel = "ID пользователя";
     document.getElementById("profileContent").innerHTML = `
         <div class="profile-card">
@@ -2876,7 +2870,7 @@ async function createVKLinkCode() {
 }
 
 async function linkVKByCode() {
-    const code = await tgPrompt("Откройте профиль в Telegram, нажмите «Привязать VK» и введите полученный код:");
+    const code = await tgPrompt("Код привязки из Telegram:");
     if (!code) return;
     try {
         const res = await api("/api/me/link", {
