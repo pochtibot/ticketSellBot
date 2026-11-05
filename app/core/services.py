@@ -59,10 +59,32 @@ class UserService:
                 })
                 return user
 
+            # При удалении аккаунта его запись остаётся в users, а identity
+            # продолжает указывать на неё. При повторном входе сразу создаём
+            # чистый аккаунт и переназначаем identity. Не ищем ниже по всем
+            # историческим записям: после нескольких удалений их может быть
+            # несколько, что приводило к MultipleResultsFound.
+            if user is not None and user.deleted_at is not None:
+                logger.info("", extra={
+                    "event_type": "user.recreated_after_delete",
+                    "platform": platform.value,
+                    "user_id": platform_user_id,
+                    "old_user_id": str(user.id),
+                    "status": "success",
+                    "duration_ms": _ms(start),
+                })
+                return await self._create_fresh_user(
+                    platform=platform,
+                    platform_user_id=platform_user_id,
+                    name=name,
+                    username=username,
+                    start=start,
+                )
+
         # 2. Legacy-пользователь (без identity) — backfill
         stmt = select(User).where(
             and_(User.platform == platform, User.platform_user_id == platform_user_id)
-        )
+        ).order_by(User.created_at.desc(), User.id.desc()).limit(1)
         result = await self.session.execute(stmt)
         user = result.scalar_one_or_none()
         if user is not None and user.deleted_at is None:
@@ -70,8 +92,9 @@ class UserService:
             self._maybe_set_username(user, username)
             return user
 
-        # 2а. Удалённый пользователь (deleted_at задан) — создаём ЧИСТЫЙ аккаунт.
-        #     Старый пользователь остаётся удалённым; identity переназначается на нового.
+        # 2а. Удалённая legacy-запись — создаём ЧИСТЫЙ аккаунт. Берём только
+        #     самую новую запись, так как после повторных удалений сохраняется
+        #     несколько анонимизированных записей с тем же platform_user_id.
         if user is not None and user.deleted_at is not None:
             logger.info("", extra={
                 "event_type": "user.recreated_after_delete",

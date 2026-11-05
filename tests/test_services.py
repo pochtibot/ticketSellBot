@@ -107,6 +107,28 @@ class TestUserService:
         assert new_user.deleted_at is None
         assert new_user.name == "New Life"
 
+    async def test_repeated_delete_and_login_keeps_account_usable(self, db_session, user_svc):
+        """После повторных удалений вход снова создаёт активный чистый аккаунт."""
+        platform_user_id = f"vk_deleted_{uuid.uuid4()}"
+        user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name="Original",
+        )
+
+        for cycle in range(2):
+            await user_svc.delete_account(user.id)
+            await db_session.flush()
+            recreated = await user_svc.get_or_create(
+                platform=PlatformType.vk,
+                platform_user_id=platform_user_id,
+                name=f"Recreated {cycle + 1}",
+            )
+            assert recreated.id != user.id
+            assert recreated.deleted_at is None
+            assert recreated.name == f"Recreated {cycle + 1}"
+            user = recreated
+
     async def test_delete_account_idempotent(self, db_session, user_svc, sample_user):
         """Повторный delete_account — не ошибка (идемпотентно)."""
         await user_svc.delete_account(sample_user.id)
