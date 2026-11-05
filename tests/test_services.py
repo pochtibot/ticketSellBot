@@ -155,6 +155,18 @@ class TestUserService:
             ("7654321", "Моё сообщество"),
         ]
 
+        # Repair also handles accounts recreated before the fix was deployed.
+        groups[0].owner_user_id = old_user.id
+        await db_session.flush()
+        same_user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name="VK organizer again",
+        )
+        assert same_user.id == new_user.id
+        recovered = await group_svc.list_vk_groups(same_user.id)
+        assert [group.group_id for group in recovered] == ["7654321"]
+
     async def test_delete_account_idempotent(self, db_session, user_svc, sample_user):
         """Повторный delete_account — не ошибка (идемпотентно)."""
         await user_svc.delete_account(sample_user.id)

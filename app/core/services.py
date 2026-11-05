@@ -49,6 +49,7 @@ class UserService:
             user = await self.session.get(User, identity.user_id)
             if user is not None and user.deleted_at is None:
                 self._maybe_set_username(user, username)
+                await self._restore_deleted_vk_groups(user.id, platform, platform_user_id)
                 logger.info("", extra={
                     "event_type": "user.found",
                     "platform": platform.value,
@@ -91,6 +92,7 @@ class UserService:
         if user is not None and user.deleted_at is None:
             await self._ensure_identity(user.id, platform, platform_user_id)
             self._maybe_set_username(user, username)
+            await self._restore_deleted_vk_groups(user.id, platform, platform_user_id)
             return user
 
         # 2а. Удалённая legacy-запись — создаём ЧИСТЫЙ аккаунт. Берём только
@@ -153,15 +155,9 @@ class UserService:
             await self.session.flush()
         else:
             await self._ensure_identity(user.id, platform, platform_user_id)
-        # Account recreation keeps the same authenticated platform identity.
-        # Restore its VK groups to the fresh account so their unique group IDs
-        # don't remain locked to the anonymized, deleted user row.
-        if previous_user_id is not None and previous_user_id != user.id:
-            await self.session.execute(
-                update(VKGroup)
-                .where(VKGroup.owner_user_id == previous_user_id)
-                .values(owner_user_id=user.id)
-            )
+        await self._restore_deleted_vk_groups(
+            user.id, platform, platform_user_id, previous_user_id=previous_user_id
+        )
         logger.info("", extra={
             "event_type": "user.created",
             "platform": platform.value,
@@ -170,6 +166,39 @@ class UserService:
             "duration_ms": _ms(start),
         })
         return user
+
+    async def _restore_deleted_vk_groups(
+        self,
+        current_user_id: uuid.UUID,
+        platform: PlatformType,
+        platform_user_id: str,
+        previous_user_id: uuid.UUID | None = None,
+    ) -> None:
+        """Attach stale VK groups to the current account for the same VK ID.
+
+        Account recreation can leave group rows attached to an older anonymized
+        User row. Reconcile them on every VK login, including users recreated
+        before this repair was deployed.
+        """
+        if platform is not PlatformType.vk:
+            return
+        old_owner_ids_result = await self.session.execute(
+            select(User.id).where(
+                User.platform == PlatformType.vk,
+                User.platform_user_id == platform_user_id,
+                User.deleted_at.is_not(None),
+                User.id != current_user_id,
+            )
+        )
+        old_owner_ids = set(old_owner_ids_result.scalars().all())
+        if previous_user_id is not None and previous_user_id != current_user_id:
+            old_owner_ids.add(previous_user_id)
+        if old_owner_ids:
+            await self.session.execute(
+                update(VKGroup)
+                .where(VKGroup.owner_user_id.in_(old_owner_ids))
+                .values(owner_user_id=current_user_id)
+            )
 
     @staticmethod
     def _maybe_set_username(user: User, username: str | None) -> None:
