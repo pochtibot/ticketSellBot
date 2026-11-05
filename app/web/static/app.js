@@ -2635,29 +2635,18 @@ async function showMyVKGroups() {
 function renderMyVKGroups(groups) {
     hideLoading();
     const container = document.getElementById("myVKGroupsContent");
+    const canChooseVKGroup = state.platform === "vk" && Boolean(window.vkBridge);
     let html = `
         <h2 style="margin-bottom:16px">Мои VK-группы</h2>
-        <p class="hint" style="margin-bottom:14px">Чтобы публиковать анонсы в VK-группу, откройте приложение внутри VK, войдите с аккаунта администратора группы и заранее установите приложение в настройках сообщества. При добавлении подтвердите выдачу прав группе.</p>
-        <div class="form-inline" style="margin-bottom:16px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-            <div class="form-field" style="flex:1;min-width:150px">
-                <label class="form-label">ID VK-группы</label>
-                <input class="form-input" id="vkg_id" inputmode="numeric" placeholder="12345678">
-            </div>
-            <div class="form-field" style="flex:1;min-width:120px">
-                <label class="form-label">Название (необязательно)</label>
-                <input class="form-input" id="vkg_title" placeholder="Моя группа">
-            </div>
-            <button class="btn btn-primary" onclick="addMyVKGroup()" style="margin-bottom:0">➕ Добавить</button>
-        </div>
+        <p class="hint" style="margin-bottom:14px">Выберите сообщество VK, которым вы управляете. Затем подтвердите добавление приложения и выдачу прав, необходимых для публикации анонсов и отправки билетов.</p>
+        ${canChooseVKGroup
+            ? `<button class="btn btn-primary" onclick="addMyVKGroup()" style="margin-bottom:16px">➕ Выбрать сообщество в VK</button>`
+            : `<p class="hint" style="margin-bottom:16px">Выбор сообщества доступен, когда приложение открыто внутри VK.</p>`}
     `;
-    setTimeout(() => {
-        const idInput = document.getElementById("vkg_id");
-        if (idInput) idInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addMyVKGroup(); });
-    }, 0);
 
     if (!groups || groups.length === 0) {
         html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет VK-групп</h3>
-            <p>Добавьте группу по ID — сюда будут публиковаться анонсы мероприятий</p></div>`;
+            <p>Выберите сообщество в VK — сюда будут публиковаться анонсы мероприятий</p></div>`;
     } else {
         html += `<div class="admin-list" style="margin-top:12px">`;
         for (const g of groups) {
@@ -2678,56 +2667,61 @@ function renderMyVKGroups(groups) {
 }
 
 async function addMyVKGroup() {
-    const groupId = document.getElementById("vkg_id").value.trim();
-    if (!groupId) { showToast("Введите ID VK-группы", true); return; }
-    if (!/^\d+$/.test(groupId) || !Number.isSafeInteger(Number(groupId)) || Number(groupId) <= 0) {
-        showToast("Укажите числовой ID сообщества VK (без ссылки и знака минус)", true);
+    if (state.platform !== "vk" || !window.vkBridge) {
+        showToast("Откройте приложение внутри VK, чтобы выбрать сообщество", true);
         return;
     }
-    const title = document.getElementById("vkg_title").value.trim() || null;
 
-    // В VK Mini App запрашиваем community token (VKWebAppGetCommunityToken):
-    // приложение должно быть установлено в группу, пользователь — её админ.
-    // Токен нужен для wall.post/messages.send (анонсы и DM билета).
-    let communityToken;
-    if (window.vkBridge && state.platform === "vk") {
-        showLoading();
-        try {
-            const res = await window.vkBridge.send("VKWebAppGetCommunityToken", {
-                app_id: parseInt(state.vkAppId, 10) || undefined,
-                group_id: parseInt(groupId, 10),
-                scope: "wall,messages,manage,photos,app_widget",
-            });
-            communityToken = (res && res.access_token) || "";
-        } catch (e) {
-            hideLoading();
-            const bridgeCode = e?.error_data?.error_code || e?.error_code;
-            const suffix = bridgeCode ? ` (код VK: ${bridgeCode})` : "";
-            showToast(`VK не выдал доступ${suffix}. Проверьте установку приложения в группе и права администратора.`, true);
-            return;
+    showLoading();
+    let groupId;
+    try {
+        // VK открывает штатный диалог выбора сообщества и возвращает его ID.
+        const selection = await window.vkBridge.send("VKWebAppAddToCommunity");
+        const selectedId = Number(selection && selection.group_id);
+        if (!Number.isSafeInteger(selectedId) || selectedId <= 0) {
+            throw new Error("VK не вернул ID выбранного сообщества");
         }
-        if (!communityToken) {
-            hideLoading();
-            showToast("VK не вернул токен группы. Проверьте установку приложения в сообществе и права администратора, затем попробуйте снова.", true);
-            return;
-        }
+        groupId = String(selectedId);
+    } catch (e) {
         hideLoading();
+        showToast(e.message || "Не удалось выбрать сообщество в VK", true);
+        return;
     }
 
-    const payload = { group_id: groupId, title };
-    if (communityToken) payload.community_token = communityToken;
     try {
+        // Токен группы выдаётся администратору после выбора сообщества.
+        const tokenResult = await window.vkBridge.send("VKWebAppGetCommunityToken", {
+            app_id: parseInt(state.vkAppId, 10) || undefined,
+            group_id: Number(groupId),
+            scope: "wall,messages,manage,photos,app_widget",
+        });
+        const communityToken = (tokenResult && tokenResult.access_token) || "";
+        if (!communityToken) {
+            throw new Error("VK не вернул токен сообщества");
+        }
+
+        // Имя подтягиваем из VK, но оно необязательно для сохранения связи.
+        let title = null;
+        try {
+            const info = await window.vkBridge.send("VKWebAppGetGroupInfo", { group_id: Number(groupId) });
+            title = (info && info.name) || null;
+        } catch (_) {}
+
         await api("/api/me/vk-groups", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({ group_id: groupId, title, community_token: communityToken }),
         });
-        showToast("✅ VK-группа добавлена" + (communityToken ? " (с токеном)" : ""));
+        hideLoading();
+        showToast("✅ Сообщество VK подключено");
         await showMyVKGroups();
     } catch (e) {
+        hideLoading();
         const message = e.message || "Ошибка добавления VK-группы";
         if (message.includes("Не удалось подтвердить токен")) {
-            showToast("VK не подтвердил токен. Проверьте ID группы и выданные приложению права.", true);
+            showToast("VK не подтвердил доступ к выбранному сообществу. Проверьте права администратора.", true);
+        } else if (message.includes("токен сообщества")) {
+            showToast("VK не выдал доступ. Проверьте, что вы администратор сообщества, и повторите выбор.", true);
         } else {
             showToast(message, true);
         }
