@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
-from sqlalchemy import select, func, and_, delete
+from sqlalchemy import select, func, and_, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import (
@@ -79,6 +79,7 @@ class UserService:
                     name=name,
                     username=username,
                     start=start,
+                    previous_user_id=user.id,
                 )
 
         # 2. Legacy-пользователь (без identity) — backfill
@@ -110,6 +111,7 @@ class UserService:
                 name=name,
                 username=username,
                 start=start,
+                previous_user_id=user.id,
             )
 
         # 3. Новый пользователь: user + identity
@@ -128,6 +130,7 @@ class UserService:
         name: Optional[str],
         username: Optional[str],
         start: float,
+        previous_user_id: uuid.UUID | None = None,
     ) -> User:
         """Создать нового пользователя и переназначить identity на него.
 
@@ -150,6 +153,15 @@ class UserService:
             await self.session.flush()
         else:
             await self._ensure_identity(user.id, platform, platform_user_id)
+        # Account recreation keeps the same authenticated platform identity.
+        # Restore its VK groups to the fresh account so their unique group IDs
+        # don't remain locked to the anonymized, deleted user row.
+        if previous_user_id is not None and previous_user_id != user.id:
+            await self.session.execute(
+                update(VKGroup)
+                .where(VKGroup.owner_user_id == previous_user_id)
+                .values(owner_user_id=user.id)
+            )
         logger.info("", extra={
             "event_type": "user.created",
             "platform": platform.value,

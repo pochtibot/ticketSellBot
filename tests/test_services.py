@@ -10,7 +10,7 @@ from sqlalchemy import select, func
 
 from app.core.models import User, Event, Ticket, Payment, ChannelAdmin, PromoCode
 from app.core.models import PlatformType, TicketStatus, PaymentStatus, SubscriptionTier, DiscountType
-from app.core.services import ChannelService, ChannelAdminService, TicketService
+from app.core.services import ChannelService, ChannelAdminService, TicketService, VKGroupService
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -128,6 +128,32 @@ class TestUserService:
             assert recreated.deleted_at is None
             assert recreated.name == f"Recreated {cycle + 1}"
             user = recreated
+
+    async def test_vk_groups_follow_same_identity_after_account_recreation(self, db_session, user_svc):
+        """Группы не остаются заблокированы на анонимизированном VK-аккаунте."""
+        platform_user_id = f"vk_group_owner_{uuid.uuid4()}"
+        old_user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name="VK organizer",
+        )
+        group_svc = VKGroupService(db_session)
+        await group_svc.register_vk_group(old_user.id, "7654321", title="Моё сообщество")
+        await db_session.flush()
+
+        await user_svc.delete_account(old_user.id)
+        await db_session.flush()
+        new_user = await user_svc.get_or_create(
+            platform=PlatformType.vk,
+            platform_user_id=platform_user_id,
+            name="VK organizer again",
+        )
+
+        assert new_user.id != old_user.id
+        groups = await group_svc.list_vk_groups(new_user.id)
+        assert [(group.group_id, group.title) for group in groups] == [
+            ("7654321", "Моё сообщество"),
+        ]
 
     async def test_delete_account_idempotent(self, db_session, user_svc, sample_user):
         """Повторный delete_account — не ошибка (идемпотентно)."""
