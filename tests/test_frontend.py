@@ -46,6 +46,13 @@ def test_appjs_has_vk_groups_ui():
     assert "removeMyVKGroup" in APP_JS
 
 
+def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
+    assert "function getVKCommunityTokenMethod(bridge)" in APP_JS
+    assert '"VKWebAppGetCommunityAuthToken"' in APP_JS
+    assert 'scope: "manage,messages,photos"' in APP_JS
+    assert 'scope: "wall,messages,manage,photos,app_widget"' not in APP_JS
+
+
 def test_appjs_has_linking_ui():
     assert "createVKLinkCode" in APP_JS
     assert "linkVKByCode" in APP_JS

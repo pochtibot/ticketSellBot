@@ -2724,6 +2724,21 @@ async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
     }
 }
 
+function getVKCommunityTokenMethod(bridge) {
+    // VK clients expose different names for this Bridge method. This follows
+    // the compatibility order used by VK's Mini Apps API package.
+    const methods = [
+        "VKWebAppCommunityAccessToken",
+        "VKWebAppCommunityToken",
+        "VKWebAppGetCommunityAuthToken",
+        "VKWebAppGetCommunityToken",
+    ];
+    if (typeof bridge?.supports !== "function") return "VKWebAppGetCommunityToken";
+    return methods.find(method => {
+        try { return bridge.supports(method); } catch (_) { return false; }
+    }) || null;
+}
+
 async function addMyVKGroup() {
     if (state.platform !== "vk" || !window.vkBridge) {
         showToast("Откройте приложение внутри VK, чтобы загрузить сообщества", true);
@@ -2783,16 +2798,23 @@ async function connectMyVKGroup(groupId) {
     const title = community?.name || null;
     showLoading();
     let communityToken = "";
+    let tokenError = "";
     try {
         try {
-            const tokenResult = await vkBridgeRequest("VKWebAppGetCommunityToken", {
+            const tokenMethod = getVKCommunityTokenMethod(window.vkBridge);
+            if (!tokenMethod) throw new Error("Эта версия VK не поддерживает выдачу токена сообщества. Обновите VK и повторите попытку.");
+            const tokenResult = await vkBridgeRequest(tokenMethod, {
                 app_id: Number(state.vkAppId),
                 group_id: id,
-                scope: "wall,messages,manage,photos,app_widget",
+                // `wall` is not a valid community-token scope. `manage` grants
+                // community administration; the other scopes cover app flows.
+                scope: "manage,messages,photos",
             });
             communityToken = (tokenResult && tokenResult.access_token) || "";
-        } catch (_) {
+            if (!communityToken) tokenError = "VK подтвердил запрос, но не вернул токен сообщества.";
+        } catch (error) {
             // Keep the group visible and removable even if VK denies the token.
+            tokenError = error?.message || error?.error_data?.error_reason || "VK отказал в выдаче токена сообщества.";
         }
 
         const registerGroup = token => api("/api/me/vk-groups", {
@@ -2818,7 +2840,7 @@ async function connectMyVKGroup(groupId) {
         renderMyVKGroups(linked);
         showToast(communityToken
             ? "✅ Сообщество VK подключено"
-            : "Сообщество добавлено без токена. Проверьте установку приложения и права администратора.", !communityToken);
+            : `Сообщество добавлено без токена. ${tokenError} Проверьте права администратора и разрешения приложения.`, !communityToken);
     } catch (e) {
         hideLoading();
         showToast(e.message || "Ошибка подключения сообщества", true);
