@@ -108,6 +108,7 @@ async def post_to_group_wall(group, text: str) -> bool:
             "wall.post",
             token,
             owner_id=f"-{group.group_id.lstrip('-')}",
+            from_group=1,
             message=text,
         )
         logger.info("Анонс опубликован в VK-группу %s", group.group_id)

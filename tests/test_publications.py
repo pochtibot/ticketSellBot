@@ -101,6 +101,7 @@ class TestVKAPI:
             kwargs = call.await_args
             assert kwargs.args[0] == "wall.post"
             assert kwargs.kwargs["owner_id"] == "-123"
+            assert kwargs.kwargs["from_group"] == 1
 
     async def test_post_to_group_wall_no_token(self):
         group = VKGroup(group_id="123", community_token="")
