@@ -1728,7 +1728,12 @@ async function showAdminEventForm(eventId) {
                 <input class="form-input" type="number" min="0" step="1" id="f_invites" value="${event ? (event.invites_quota || 0) : 0}">
                 <div class="hint" style="margin:4px 0 0">Сколько пригласительных можно выдать из непроданных мест</div>
             </div>` : ''}
-            ${!event ? `
+            ${!event && isVKMode() ? `
+            <div class="form-field">
+                <label class="form-label">Публикация</label>
+                <div class="hint">Мероприятие создастся в вашем кабинете. После сохранения выберите VK-группу в разделе «Действия», чтобы опубликовать его.</div>
+            </div>` : ''}
+            ${!event && !isVKMode() ? `
             <div class="form-field">
                 <label class="form-label">Канал (необязательно, если нет — через Mini App)</label>
                 <select class="form-input" id="f_channel">
@@ -1829,7 +1834,7 @@ async function submitAdminEventForm(eventId) {
     if (invites_quota !== undefined) payload.invites_quota = invites_quota;
     if (age_restriction !== undefined) payload.age_restriction = age_restriction;
     if (!eventId) {
-        const channelId = document.getElementById("f_channel").value;
+        const channelId = document.getElementById("f_channel")?.value || "";
         payload.channel_id = channelId || null;
         if (!channelId && state.me) payload.owner_user_id = state.me.id;
     }
@@ -1890,14 +1895,18 @@ async function showAdminEventDetail(eventId) {
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
         try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges);
+        let vkGroups = [];
+        if (isVKMode()) {
+            try { vkGroups = await api("/api/me/vk-groups"); } catch (e) { /* группы могут быть недоступны */ }
+        }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges, vkGroups);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges, vkGroups = []) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
@@ -2018,11 +2027,15 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Группа для публикации' : 'Канал для публикации'}</label>
                 <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
-                    <option value="">Без канала (DM)</option>
-                    ${(state.me?.channels || []).map(c =>
-                        `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
-                    ).join('')}
+                    ${isVKMode()
+                        ? `<option value="">${vkGroups.length ? 'Выберите группу' : 'Нет подключённых VK-групп'}</option>` + vkGroups.map(g =>
+                            `<option value="${escapeHtml(g.group_id)}" ${g.has_token ? '' : 'disabled'}>${escapeHtml(g.title || g.group_id)}${g.has_token ? '' : ' — нет токена'}</option>`
+                        ).join('')
+                        : '<option value="">Без канала (DM)</option>' + (state.me?.channels || []).map(c =>
+                            `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
+                        ).join('')}
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
             </div>
@@ -2226,8 +2239,14 @@ async function downloadQr(ticketId) {
 async function adminPublish(eventId) {
     const channelSelect = document.getElementById(`publish_channel_${eventId}`);
     const channelId = channelSelect ? channelSelect.value : "";
+    if (isVKMode() && !channelId) {
+        showToast("Подключите VK-группу и выберите её для публикации", true);
+        return;
+    }
     try {
-        const body = channelId ? JSON.stringify({ channel_id: channelId }) : undefined;
+        const body = channelId
+            ? JSON.stringify(isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId })
+            : undefined;
         const res = await api(`/api/admin/events/${eventId}/publish`, {
             method: "POST",
             headers: body ? { "Content-Type": "application/json" } : undefined,
