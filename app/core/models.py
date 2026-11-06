@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 import secrets
 
-from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, LargeBinary, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -287,6 +287,21 @@ class Event(Base):
 
     def __repr__(self):
         return f"<Event {self.title}>"
+
+
+class EventPoster(Base):
+    """Compressed image uploaded directly from the Mini App event form."""
+
+    __tablename__ = "event_posters"
+
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), primary_key=True
+    )
+    image_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(32), nullable=False, default="image/jpeg")
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
 
 class EventManager(Base):

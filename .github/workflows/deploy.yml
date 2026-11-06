@@ -226,6 +226,14 @@ jobs:
             ALTER TABLE events ADD COLUMN IF NOT EXISTS media_telegram_file_id VARCHAR(512);
             ALTER TABLE events ADD COLUMN IF NOT EXISTS media_type VARCHAR(20);
 
+            -- Uploaded event posters (migration 0018)
+            CREATE TABLE IF NOT EXISTS event_posters (
+                event_id UUID PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+                image_data BYTEA NOT NULL,
+                content_type VARCHAR(32) NOT NULL DEFAULT 'image/jpeg',
+                uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+
             -- invites_quota for events (invite tickets, pro)
             ALTER TABLE events ADD COLUMN IF NOT EXISTS invites_quota INTEGER NOT NULL DEFAULT 0;
 

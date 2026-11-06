@@ -1178,6 +1178,15 @@ textarea.form-input {
     margin: 0 0 12px;
     width: 100%;
 }
+.poster-upload-preview {
+    min-height: 28px;
+}
+.poster-upload-preview img {
+    max-width: 100%;
+    max-height: 280px;
+    object-fit: contain;
+    background: var(--surface-2, #f2f3f5);
+}
 
 /* Индикатор активного таба */
 .tab.active::after {

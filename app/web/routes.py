@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.database import async_session_factory
-from app.core.models import PlatformType, Event, VKPayOrder, VKPayProductOrder, SubscriptionTier
+from app.core.models import PlatformType, Event, EventPoster, VKPayOrder, VKPayProductOrder, SubscriptionTier
 from app.core.vk_pay_service import VKPayOrderService
 from app.core.qr import generate_qr_png
 from app.core.schemas import (
@@ -45,6 +45,8 @@ from app.core.schemas import (
     PriceRangesUpdate,
     VKPayProductOrderIn,
 )
+
+
 from app.core.services import (
     ChannelAdminService,
     ChannelService,
@@ -76,6 +78,16 @@ from app.web.vk_pay import (
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
+
+
+async def _uploaded_poster_event_ids(session, event_ids: list[UUID]) -> set[UUID]:
+    """Return IDs with direct-upload posters without selecting image bytes."""
+    if not event_ids:
+        return set()
+    result = await session.execute(
+        select(EventPoster.event_id).where(EventPoster.event_id.in_(event_ids))
+    )
+    return set(result.scalars().all())
 
 
 async def _send_ticket_dm(telegram_user_id: str, text: str) -> bool:
@@ -120,6 +132,7 @@ async def list_events(
         now = datetime.now(timezone.utc)
         ranges_map = await svc.price_ranges_map([e.id for e in events])
         reserved_map = await VKPayOrderService(session).reserved_seats_map([e.id for e in events], now)
+        poster_ids = await _uploaded_poster_event_ids(session, [e.id for e in events])
 
     return [
         {
@@ -133,6 +146,7 @@ async def list_events(
             "age_restriction": e.age_restriction,
             "media_file_id": e.media_telegram_file_id,
             "media_type": e.media_type,
+            "has_media": bool(e.media_telegram_file_id) or e.id in poster_ids,
         }
         for e in events
     ]
@@ -160,6 +174,7 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         ranges_map = await svc.price_ranges_map([uid])
         effective_price = EventService.resolve_price(ranges_map.get(uid), event, now)
         reserved = (await VKPayOrderService(session).reserved_seats_map([uid], now)).get(uid, 0)
+        has_uploaded_poster = uid in await _uploaded_poster_event_ids(session, [uid])
 
     return {
         "id": str(event.id),
@@ -174,12 +189,14 @@ async def get_event(event_id: str, auth_data: dict = Depends(validate_init_data)
         "age_restriction": event.age_restriction,
         "media_file_id": event.media_telegram_file_id,
         "media_type": event.media_type,
+        "has_media": bool(event.media_telegram_file_id) or has_uploaded_poster,
     }
 
 
 # Простой in-memory кэш постеров (file_id → bytes), чтобы не дёргать Telegram API на каждый запрос.
 _media_cache: dict[str, bytes] = {}
 _MEDIA_CACHE_MAX = 64
+_POSTER_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
 
 
 @router.get("/events/{event_id}/media")
@@ -197,8 +214,16 @@ async def event_media(event_id: str):
         event = await EventService(session).get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        poster = await session.get(EventPoster, uid)
         file_id = event.media_telegram_file_id
         media_type = event.media_type or "photo"
+
+    if poster is not None:
+        return StreamingResponse(
+            io.BytesIO(bytes(poster.image_data)),
+            media_type=poster.content_type,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
     if not file_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="У мероприятия нет постера")
@@ -231,6 +256,106 @@ async def event_media(event_id: str):
     elif raw[:3] == b"\x89PN":
         mime = "image/png"
     return StreamingResponse(io.BytesIO(raw), media_type=mime)
+
+
+@router.put("/admin/events/{event_id}/poster")
+async def admin_upload_event_poster(
+    event_id: str,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Загрузить или заменить афишу мероприятия из Mini App."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _POSTER_UPLOAD_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Некорректный размер файла")
+
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > _POSTER_UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Выберите изображение афиши")
+
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        image = Image.open(io.BytesIO(raw))
+        if image.format not in {"JPEG", "PNG", "WEBP"}:
+            raise HTTPException(status_code=415, detail="Поддерживаются изображения JPG, PNG и WebP")
+        if image.width * image.height > 40_000_000:
+            raise HTTPException(status_code=413, detail="Слишком большое разрешение изображения")
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
+        if "A" in image.getbands():
+            rgba = image.convert("RGBA")
+            flattened = Image.new("RGB", rgba.size, "white")
+            flattened.paste(rgba, mask=rgba.getchannel("A"))
+            image = flattened
+        else:
+            image = image.convert("RGB")
+        optimized = io.BytesIO()
+        image.save(optimized, format="JPEG", quality=86, optimize=True)
+        poster_bytes = optimized.getvalue()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
+
+    async with async_session_factory() as session:
+        event = await EventService(session).get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        poster = await session.get(EventPoster, uid)
+        if poster is None:
+            poster = EventPoster(event_id=uid, image_data=poster_bytes, content_type="image/jpeg")
+            session.add(poster)
+        else:
+            poster.image_data = poster_bytes
+            poster.content_type = "image/jpeg"
+        await session.commit()
+
+    return {"event_id": str(uid), "uploaded": True, "content_type": "image/jpeg"}
+
+
+@router.delete("/admin/events/{event_id}/poster")
+async def admin_delete_event_poster(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Удалить афишу мероприятия, включая ранее сохранённую ссылку Telegram."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event = await EventService(session).get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+
+        poster = await session.get(EventPoster, uid)
+        if poster is not None:
+            await session.delete(poster)
+        # Удаляем и прежнее Telegram-медиа, если оно использовалось до загрузки файла.
+        event.media_telegram_file_id = None
+        event.media_type = None
+        await session.commit()
+
+    return {"event_id": str(uid), "deleted": True}
 
 
 @router.post("/events/{event_id}/buy", status_code=status.HTTP_201_CREATED)
@@ -1332,6 +1457,7 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
 
         # C: карта per-event премиума
         premium_map = await event_svc.get_event_premium_map([e.id for e in events])
+        poster_ids = await _uploaded_poster_event_ids(session, [e.id for e in events])
 
     return [
         {
@@ -1352,6 +1478,7 @@ async def admin_list_events(current: CurrentUser = Depends(get_current_user)):
             "age_restriction": e.age_restriction,
             "media_file_id": e.media_telegram_file_id,
             "media_type": e.media_type,
+            "has_media": bool(e.media_telegram_file_id) or e.id in poster_ids,
         }
         for e in events
     ]
@@ -1438,6 +1565,7 @@ async def admin_get_event(
         channel = await channel_svc.get_by_id(event.channel_id) if event.channel_id else None
         # C: per-event премиум
         is_premium = await event_svc.get_event_is_premium(event.id)
+        has_uploaded_poster = uid in await _uploaded_poster_event_ids(session, [uid])
 
     return {
         "id": str(event.id),
@@ -1458,6 +1586,7 @@ async def admin_get_event(
         "age_restriction": event.age_restriction,
         "media_file_id": event.media_telegram_file_id,
         "media_type": event.media_type,
+        "has_media": bool(event.media_telegram_file_id) or has_uploaded_poster,
     }
 
 

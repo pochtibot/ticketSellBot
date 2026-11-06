@@ -1029,7 +1029,7 @@ function renderEvents(events) {
     for (const e of events) {
         const dateStr = formatDate(e.date);
         const soldOut = e.available_tickets <= 0;
-        const poster = e.media_file_id ? `<img class="event-poster" src="/api/events/${e.id}/media" alt="" loading="lazy">` : '';
+        const poster = (e.has_media || e.media_file_id) ? `<img class="event-poster" src="/api/events/${e.id}/media" alt="" loading="lazy">` : '';
         html += `
             <div class="event-card" onclick="showEventDetail('${e.id}')">
                 ${poster}
@@ -1093,7 +1093,7 @@ function renderEvent(event) {
         buyButton = `<button class="btn btn-primary btn-lg" onclick="showConfirm('${event.id}')">🎟 Купить билет — ${formatPrice(event.price)}</button>`;
     }
 
-    const poster = event.media_file_id ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="">` : '';
+    const poster = (event.has_media || event.media_file_id) ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="">` : '';
 
     container.innerHTML = `
         <div class="event-detail">
@@ -1696,6 +1696,17 @@ async function showAdminEventForm(eventId) {
                 <div class="hint" style="margin:4px 0 0">Организатор отвечает за корректность маркировки и допуск лиц до 18 лет</div>
             </div>
             <div class="form-field">
+                <label class="form-label" for="f_poster">Афиша мероприятия</label>
+                <input class="form-input" type="file" id="f_poster" accept="image/jpeg,image/png,image/webp" onchange="previewEventPoster(this)">
+                <div class="hint" style="margin:4px 0 8px">JPG, PNG или WebP, до 8 МБ. Если не выбрать изображение, афишу можно добавить позже.</div>
+                <div id="f_poster_preview" class="poster-upload-preview">
+                    ${(event && (event.has_media || event.media_file_id))
+                        ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media?v=${Date.now()}" alt="Текущая афиша">`
+                        : '<span class="hint">Афиша не добавлена</span>'}
+                </div>
+                ${event && (event.has_media || event.media_file_id) ? `<button class="btn btn-sm btn-danger" type="button" style="margin-top:8px" onclick="adminDeleteEventPoster('${event.id}')">Удалить афишу</button>` : ''}
+            </div>
+            <div class="form-field">
                 <label class="form-label">${isVKMode() && !canPaid ? 'Бесплатный билет' : `Цена (₽, 0 = бесплатно)${canPaid ? '' : ' — только бесплатные на вашем тарифе'}`}</label>
                 <input class="form-input" type="number" min="0" step="0.01" id="f_price" value="${event ? event.price : 0}" ${canPaid ? '' : 'disabled'}>
                 ${isVKMode() && !canPaid ? '<div class="hint" style="margin:4px 0 0">Для бесплатных организаторов доступно создание бесплатных билетов</div>' : ''}
@@ -1752,6 +1763,39 @@ async function showAdminEventForm(eventId) {
     }
 }
 
+function previewEventPoster(input) {
+    const preview = document.getElementById("f_poster_preview");
+    const file = input && input.files && input.files[0];
+    if (!preview || !file) return;
+    if (!file.type.startsWith("image/")) {
+        input.value = "";
+        showToast("Выберите файл изображения", true);
+        return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+        input.value = "";
+        showToast("Афиша должна быть не больше 8 МБ", true);
+        return;
+    }
+    const url = URL.createObjectURL(file);
+    preview.innerHTML = `<img class="event-poster event-poster-detail" src="${url}" alt="Предпросмотр афиши">`;
+}
+
+async function adminDeleteEventPoster(eventId) {
+    if (!confirm("Удалить афишу мероприятия? Это действие нельзя отменить.")) return;
+    try {
+        await api(`/api/admin/events/${eventId}/poster`, { method: "DELETE" });
+        const input = document.getElementById("f_poster");
+        if (input) input.value = "";
+        const preview = document.getElementById("f_poster_preview");
+        if (preview) preview.innerHTML = '<span class="hint">Афиша не добавлена</span>';
+        showToast("Афиша удалена");
+        await showAdminEventForm(eventId);
+    } catch (e) {
+        showToast(`Не удалось удалить афишу: ${e.message}`, true);
+    }
+}
+
 function toLocalInputValue(iso) {
     if (!iso) return "";
     const d = new Date(iso);
@@ -1775,6 +1819,7 @@ async function submitAdminEventForm(eventId) {
 
     const ageRestrictionEl = document.getElementById("f_age_restriction");
     const age_restriction = ageRestrictionEl ? ageRestrictionEl.value : undefined;
+    const posterFile = document.getElementById("f_poster")?.files?.[0] || null;
 
     const payload = {
         title, description,
@@ -1793,11 +1838,22 @@ async function submitAdminEventForm(eventId) {
         let savedId = eventId;
         if (eventId) {
             await api(`/api/admin/events/${eventId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-            showToast("✅ Мероприятие обновлено");
         } else {
             const created = await api("/api/admin/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
             savedId = created.id;
-            showToast("✅ Мероприятие создано (черновик)");
+        }
+        if (posterFile) {
+            try {
+                await api(`/api/admin/events/${savedId}/poster`, {
+                    method: "PUT",
+                    headers: { "Content-Type": posterFile.type || "application/octet-stream" },
+                    body: posterFile,
+                });
+            } catch (posterError) {
+                showToast(`Мероприятие сохранено, но афиша не загружена: ${posterError.message}`, true);
+                await showAdminEventDetail(savedId);
+                return;
+            }
         }
         // Сохранить динамические цены, если заполнены диапазоны
         if (price > 0 && savedId) {
@@ -1811,6 +1867,7 @@ async function submitAdminEventForm(eventId) {
                 });
             }
         }
+        showToast(eventId ? "✅ Мероприятие обновлено" : "✅ Мероприятие создано (черновик)");
         await showAdminEvents();
     } catch (err) {
         showToast(err.message || "Ошибка сохранения", true);
@@ -1943,6 +2000,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
     `;
 
     container.innerHTML = `
+        ${(event.has_media || event.media_file_id) ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="Афиша">` : ''}
         <h2>${escapeHtml(event.title)}</h2>
         <div class="event-meta">
             <div class="meta-row"><span class="meta-label">📅 Дата</span><span>${formatDate(event.date)}</span></div>

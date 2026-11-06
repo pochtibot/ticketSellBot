@@ -45,7 +45,10 @@ def _fake_async_session_factory():
     class _Session:
         commit = AsyncMock()
         rollback = AsyncMock()
-        execute = AsyncMock()
+        execute = AsyncMock(return_value=Mock(
+            scalars=Mock(return_value=Mock(all=Mock(return_value=[])))
+        ))
+        get = AsyncMock(return_value=None)
 
     class _SessionContext:
         async def __aenter__(self):
