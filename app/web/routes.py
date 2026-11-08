@@ -1846,6 +1846,7 @@ async def admin_publish_event(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Для публикации анонса в VK сначала добавьте афишу мероприятия",
                 )
+            poster_bytes = bytes(poster.image_data)
             await event_svc.update(uid, is_published=True)
             app_link = (
                 f"https://vk.com/app{settings.vk_app_id}?event_id={uid}"
@@ -1887,7 +1888,7 @@ async def admin_publish_event(
             "is_published": True,
             "announced": story_ok,
             "platform": "vk",
-            "publication_types": [],
+            "publication_types": ["story"] if story_ok else [],
             "wall_attempted": False,
             "story_attempted": story_attempted,
             # A user token from VKWebAppGetAuthToken is IP-bound. Return the
