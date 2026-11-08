@@ -134,6 +134,9 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
         "function getVKCommunityTokenMethod", 1
     )[0]
     assert 'post.poster_url' in publish_fn
+    assert '"X-VK-Upload-URL": upload.upload_url' in publish_fn
+    assert 'api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`' in publish_fn
+    assert 'fetch(upload.upload_url' not in publish_fn
     assert 'attachments: attachment' in publish_fn
     assert 'message: post.message' not in publish_fn
     assert 'post.attachments' not in publish_fn

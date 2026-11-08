@@ -262,6 +262,53 @@ class TestPublishWeb:
         assert publications[0].target_type == "vk_group_wall"
         assert publications[0].status == "posted"
 
+    async def test_vk_wall_photo_upload_is_relayed_from_server(self, db_client, db_session, owner_event_vk_group):
+        owner, event, group = owner_event_vk_group
+        await db_session.commit()
+        from app.web.dependencies import CurrentUser, get_current_user
+        test_app = db_client._transport.app
+        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id=owner.id,
+            telegram_user_id="55",
+            name="VK admin",
+            is_super_admin=False,
+            platform=PlatformType.vk,
+        )
+
+        class UploadResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
+
+        class UploadClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, url, files):
+                assert url == "https://pu.vk.com/upload.php?token=temporary"
+                assert files["photo"][1] == b"poster-bytes"
+                return UploadResponse()
+
+        with patch("app.web.routes.httpx.AsyncClient", side_effect=lambda **kwargs: UploadClient()):
+            resp = await db_client.post(
+                f"/api/admin/events/{event.id}/vk-wall-photo-upload",
+                headers={
+                    "X-Skip-Auth": "1",
+                    "X-VK-Group-ID": group.group_id,
+                    "X-VK-Upload-URL": "https://pu.vk.com/upload.php?token=temporary",
+                    "Content-Type": "image/jpeg",
+                },
+                content=b"poster-bytes",
+            )
+        test_app.dependency_overrides.clear()
+        assert resp.status_code == 200
+        assert resp.json() == {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
+
     async def test_publish_to_vk_group_requires_poster(self, db_client, db_session, owner_event_vk_group):
         owner, event, group = owner_event_vk_group
         poster = await db_session.get(EventPoster, event.id)

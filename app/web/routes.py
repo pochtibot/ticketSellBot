@@ -8,9 +8,10 @@ import io
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
@@ -2006,6 +2007,94 @@ async def record_manual_vk_publication(
         )
         await session.commit()
     return {"event_id": str(uid), "group_id": group.group_id, "status": "posted"}
+
+
+@router.post("/admin/events/{event_id}/vk-wall-photo-upload")
+async def relay_vk_wall_photo_upload(
+    event_id: str,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Relay the VK photo upload from the same origin to avoid browser CORS failures.
+
+    VK still issues the upload URL and saves the photo through VK Bridge; only
+    the raw multipart upload is proxied here. The URL is restricted to VK hosts.
+    """
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    group_id = (request.headers.get("X-VK-Group-ID") or "").strip().lstrip("-")
+    upload_url = request.headers.get("X-VK-Upload-URL") or ""
+    try:
+        parsed_url = urlsplit(upload_url)
+        host = (parsed_url.hostname or "").lower()
+        allowed_host = host == "vk.com" or host.endswith(".vk.com")
+        valid_port = parsed_url.port in (None, 443)
+    except ValueError:
+        allowed_host = valid_port = False
+        parsed_url = None
+    if (
+        not parsed_url
+        or parsed_url.scheme != "https"
+        or not allowed_host
+        or not valid_port
+        or parsed_url.username
+        or parsed_url.password
+    ):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VK вернул недопустимый адрес загрузки")
+    if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное VK-сообщество")
+
+    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Ожидалась афиша в формате JPG, PNG или WebP")
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _POSTER_UPLOAD_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Некорректный размер файла")
+    image = bytearray()
+    async for chunk in request.stream():
+        image.extend(chunk)
+        if len(image) > _POSTER_UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
+    if not image:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Афиша пуста")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        group_svc = VKGroupService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        group = await group_svc.get_by_group_id(group_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
+        if group.owner_user_id != current.user_id and not current.is_super_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            response = await client.post(
+                upload_url,
+                files={"photo": ("poster.jpg", bytes(image), content_type)},
+            )
+            response.raise_for_status()
+            upload_result = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("VK photo upload relay failed for event %s: %s", uid, exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK отклонил загрузку афиши")
+    if not isinstance(upload_result, dict) or not all(key in upload_result for key in ("server", "photo", "hash")):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK вернул неполный результат загрузки афиши")
+    return upload_result
 
 
 @router.get("/admin/events/{event_id}/publications")

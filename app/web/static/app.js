@@ -2258,7 +2258,7 @@ async function adminPublish(eventId) {
             let wallError = "";
             if (res.manual_fallback && res.manual_post && window.vkBridge) {
                 try {
-                    const result = await publishVKWallPostFromMiniApp(channelId, res.manual_post);
+                    const result = await publishVKWallPostFromMiniApp(eventId, channelId, res.manual_post);
                     await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -2852,7 +2852,7 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
     return result.response;
 }
 
-async function publishVKWallPostFromMiniApp(groupId, post) {
+async function publishVKWallPostFromMiniApp(eventId, groupId, post) {
     if (!window.vkBridge || !post || !post.poster_url) throw new Error("Для тестовой публикации нужна афиша мероприятия");
     const appId = Number(state.vkAppId);
     const numericGroupId = Number(groupId);
@@ -2871,7 +2871,12 @@ async function publishVKWallPostFromMiniApp(groupId, post) {
 
     let attachment = "";
     if (post.poster_url) {
-        const posterResponse = await fetch(post.poster_url);
+        let posterResponse;
+        try {
+            posterResponse = await fetch(post.poster_url);
+        } catch (error) {
+            throw new Error(`Не удалось получить афишу с сервера: ${error.message || "ошибка сети"}`);
+        }
         if (!posterResponse.ok) throw new Error("Не удалось загрузить афишу мероприятия");
         const posterBlob = await posterResponse.blob();
         const upload = await callVKAPIMethodFromMiniApp(
@@ -2879,11 +2884,15 @@ async function publishVKWallPostFromMiniApp(groupId, post) {
         );
         if (!upload || !upload.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
 
-        const form = new FormData();
-        form.append("photo", posterBlob, `event-${numericGroupId}-poster.jpg`);
-        const uploadResponse = await fetch(upload.upload_url, { method: "POST", body: form });
-        if (!uploadResponse.ok) throw new Error("VK отклонил загрузку афиши");
-        const uploaded = await uploadResponse.json();
+        const uploaded = await api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`, {
+            method: "POST",
+            headers: {
+                "Content-Type": posterBlob.type || "image/jpeg",
+                "X-VK-Group-ID": String(numericGroupId),
+                "X-VK-Upload-URL": upload.upload_url,
+            },
+            body: posterBlob,
+        });
         if (!uploaded || uploaded.server == null || !uploaded.photo || !uploaded.hash) {
             throw new Error("VK вернул неполные данные загруженной афиши");
         }
