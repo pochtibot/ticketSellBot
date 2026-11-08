@@ -69,11 +69,8 @@ from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
     get_group_story_eligibility,
     post_to_group_story,
-    post_to_group_wall,
     send_vk_ticket_dm,
     verify_group_token,
-    verify_vk_user_and_group_admin,
-    verify_vk_wall_post,
 )
 from app.web.vk_pay import (
     VK_PAY_NOTIFICATION_VERSION,
@@ -1849,57 +1846,12 @@ async def admin_publish_event(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Для публикации анонса в VK сначала добавьте афишу мероприятия",
                 )
-            poster_bytes = bytes(poster.image_data)
-
             await event_svc.update(uid, is_published=True)
             app_link = (
                 f"https://vk.com/app{settings.vk_app_id}?event_id={uid}"
                 if settings.vk_app_id
                 else None
             )
-            wall_ok = False
-            wall_attempted = False
-            wall_error = "Нужно разрешение администратора VK на публикацию на стене"
-            user_token = (body.vk_user_access_token or "").strip()
-            if current.platform is PlatformType.vk and user_token:
-                authorized = await verify_vk_user_and_group_admin(
-                    current.telegram_user_id, group.group_id, user_token
-                )
-                if authorized:
-                    wall_attempted = True
-                    event_date = event.date.strftime("%d.%m.%Y %H:%M")
-                    price_text = "Бесплатно" if float(event.price) <= 0 else f"{float(event.price):g} ₽"
-                    lines = [f"🎫 {event.title}"]
-                    if event.description:
-                        lines.extend(["", event.description])
-                    lines.extend([
-                        "",
-                        f"📅 {event_date}",
-                        f"📍 {event.location or 'Место уточняется'}",
-                        f"💰 {price_text}",
-                        f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
-                    ])
-                    if app_link:
-                        lines.extend(["", f"Билеты и подробности: {app_link}"])
-                    wall_ok = await post_to_group_wall(
-                        group.group_id, user_token, poster_bytes, "\n".join(lines)
-                    )
-                    if not wall_ok:
-                        wall_error = "VK не подтвердил публикацию записи на стене"
-                else:
-                    wall_error = "Пользователь VK не подтверждён как администратор выбранного сообщества"
-
-            if wall_attempted:
-                await event_svc.add_publication(
-                    event_id=uid,
-                    platform=PlatformType.vk,
-                    target_type="vk_group_wall",
-                    target_id=group.group_id,
-                    created_by=current.user_id,
-                    status="posted" if wall_ok else "error",
-                    last_error=None if wall_ok else wall_error,
-                )
-
             # Use VK's current community metadata to avoid predictably rejected
             # story uploads. Community-token stories are not available to every group.
             story_eligible = await get_group_story_eligibility(
@@ -1933,23 +1885,29 @@ async def admin_publish_event(
         return {
             "id": str(uid),
             "is_published": True,
-            "announced": wall_ok or story_ok,
+            "announced": story_ok,
             "platform": "vk",
-            "publication_types": (["wall"] if wall_ok else []) + (["story"] if story_ok else []),
-            "wall_attempted": wall_attempted,
+            "publication_types": [],
+            "wall_attempted": False,
             "story_attempted": story_attempted,
-            "manual_fallback": not wall_ok,
+            # A user token from VKWebAppGetAuthToken is IP-bound. Return the
+            # prepared post to the Mini App so it can upload the poster and call
+            # wall.post through VKWebAppCallAPIMethod inside the VK client.
+            "manual_fallback": True,
             "manual_post": {
                 "owner_id": -int(group.group_id),
                 "message": "\n".join([
                     f"🎫 {event.title}",
+                    *( ["", event.description] if event.description else [] ),
+                    "",
                     f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
                     f"📍 {event.location or 'Место уточняется'}",
                     f"💰 {'Бесплатно' if float(event.price) <= 0 else f'{float(event.price):g} ₽'}",
+                    f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
                     *( ["", f"Билеты и подробности: {app_link}"] if app_link else [] ),
                 ]),
-                "attachments": app_link or "",
-            } if not wall_ok else None,
+                "poster_url": f"/api/events/{uid}/media",
+            },
             "group_id": group.group_id,
         }
 
@@ -2016,7 +1974,7 @@ async def record_manual_vk_publication(
     body: ManualVKPublicationIn,
     current: CurrentUser = Depends(get_current_user),
 ):
-    """Record a wall post confirmed through VKWebAppShowWallPostBox."""
+    """Record a successful post returned by VKWebAppCallAPIMethod / wall.post."""
     if current.platform is not PlatformType.vk:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
     try:
@@ -2037,14 +1995,6 @@ async def record_manual_vk_publication(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
         if group.owner_user_id != current.user_id and not current.is_super_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
-        verified = await verify_vk_wall_post(
-            current.telegram_user_id,
-            group.group_id,
-            body.post_id,
-            body.vk_user_access_token,
-        )
-        if not verified:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VK не подтвердил эту запись на стене")
         await event_svc.add_publication(
             event_id=uid,
             platform=PlatformType.vk,

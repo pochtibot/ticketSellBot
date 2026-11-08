@@ -117,9 +117,14 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
 
 
-def test_vk_manual_wall_composer_waits_for_native_result_and_reports_bridge_error():
-    """The native composer can remain open while edited; keep its rejection detail."""
-    assert 'vkBridgeRequest("VKWebAppShowWallPostBox", wallPostParams, null)' in APP_JS
+def test_vk_wall_publication_uses_bridge_api_without_sending_user_token_to_backend():
+    """The IP-bound VK user token stays in Mini App for wall.post."""
+    assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
+    assert 'scope: "wall,photos"' in APP_JS
+    assert 'callVKAPIMethodFromMiniApp("wall.post"' in APP_JS
+    assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId })' in APP_JS
+    assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId, vk_user_access_token' not in APP_JS
+    assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' not in APP_JS
     assert "function formatVKBridgeError(error" in APP_JS
     assert "error.error_code || data.error_code" in APP_JS
 

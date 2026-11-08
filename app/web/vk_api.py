@@ -73,53 +73,10 @@ def _response_items(response) -> list[dict]:
     return []
 
 
-async def verify_vk_user_and_group_admin(user_id: str, group_id: str, token: str) -> bool:
-    """Ensure a VK user token belongs to user_id and that user administers group_id."""
-    if not token or not str(user_id).isdigit() or not str(group_id).isdigit():
-        return False
-    try:
-        users = await vk_api_call("users.get", token)
-        if not isinstance(users, list) or not users or str(users[0].get("id")) != str(user_id):
-            logger.warning("VK wall token identity mismatch for user %s", user_id)
-            return False
-        groups = await vk_api_call(
-            "groups.getById",
-            token,
-            group_ids=str(group_id),
-            fields="is_admin,admin_level,verified,trending,wall",
-        )
-        items = _response_items(groups)
-        return any(
-            str(item.get("id")) == str(group_id) and bool(int(item.get("is_admin") or 0))
-            for item in items
-        )
-    except (VKAPIError, TypeError, ValueError, KeyError) as e:
-        logger.warning("VK wall token check failed for group %s: %s", group_id, e)
-        return False
-
-
 async def get_group_story_eligibility(group_id: str, community_token: str) -> bool:
     """Return True only when VK reports a verified or trending community."""
     token = decrypt_token(community_token or "")
     if not token:
-        return False
-
-
-async def verify_vk_wall_post(user_id: str, group_id: str, post_id: int, token: str) -> bool:
-    """Verify a manually confirmed post actually belongs to the target community wall."""
-    if post_id <= 0 or not await verify_vk_user_and_group_admin(user_id, group_id, token):
-        return False
-    try:
-        response = await vk_api_call(
-            "wall.getById", token, posts=f"-{int(group_id)}_{post_id}"
-        )
-        return any(
-            int(item.get("id") or 0) == post_id
-            and int(item.get("owner_id") or 0) == -int(group_id)
-            for item in _response_items(response)
-        )
-    except (VKAPIError, TypeError, ValueError, KeyError) as e:
-        logger.warning("Could not verify manual VK wall post %s_%s: %s", group_id, post_id, e)
         return False
     try:
         response = await vk_api_call(
@@ -135,59 +92,6 @@ async def verify_vk_wall_post(user_id: str, group_id: str, post_id: int, token: 
         )
     except (VKAPIError, TypeError, ValueError, KeyError) as e:
         logger.warning("Could not check VK story eligibility for group %s: %s", group_id, e)
-        return False
-
-
-async def post_to_group_wall(
-    group_id: str,
-    user_access_token: str,
-    image: bytes,
-    message: str,
-) -> bool:
-    """Upload an event poster and publish a community wall post with a user token."""
-    if not user_access_token or not image:
-        return False
-    try:
-        upload_server = await vk_api_call(
-            "photos.getWallUploadServer", user_access_token, group_id=int(group_id)
-        )
-        upload_url = upload_server.get("upload_url") if isinstance(upload_server, dict) else None
-        if not upload_url:
-            raise VKAPIError("VK не вернул upload_url для афиши на стену")
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                upload_url,
-                files={"photo": ("poster.jpg", image, "image/jpeg")},
-            )
-            response.raise_for_status()
-            uploaded = response.json()
-        if not isinstance(uploaded, dict) or not all(k in uploaded for k in ("server", "photo", "hash")):
-            raise VKAPIError("VK не вернул параметры загруженной афиши")
-
-        photos = await vk_api_call(
-            "photos.saveWallPhoto",
-            user_access_token,
-            group_id=int(group_id),
-            server=uploaded["server"],
-            photo=uploaded["photo"],
-            hash=uploaded["hash"],
-        )
-        saved = photos[0] if isinstance(photos, list) and photos else None
-        if not isinstance(saved, dict) or not saved.get("id") or not saved.get("owner_id"):
-            raise VKAPIError("VK не подтвердил сохранение афиши")
-        await vk_api_call(
-            "wall.post",
-            user_access_token,
-            owner_id=-int(group_id),
-            from_group=1,
-            message=message,
-            attachments=f"photo{saved['owner_id']}_{saved['id']}",
-        )
-        logger.info("VK wall post published to group %s", group_id)
-        return True
-    except (VKAPIError, httpx.HTTPError, ValueError, KeyError, IndexError) as e:
-        logger.error("Ошибка публикации записи на стену VK-группы %s: %s", group_id, e)
         return False
 
 

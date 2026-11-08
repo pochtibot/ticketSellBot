@@ -2245,22 +2245,7 @@ async function adminPublish(eventId) {
         return;
     }
     try {
-        let publishPayload = isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId };
-        if (isVKMode()) {
-            // A community key cannot call wall.post. Request a short-lived user
-            // token from the active VK administrator; the server only uses it
-            // for this publication request and never stores it.
-            try {
-                const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
-                    app_id: Number(state.vkAppId),
-                    scope: "groups,wall,photos",
-                });
-                if (auth && auth.access_token) publishPayload.vk_user_access_token = auth.access_token;
-            } catch (_) {
-                // Continue: eligible communities can still receive a story with
-                // their community token; otherwise the native post composer is offered.
-            }
-        }
+        const publishPayload = isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId };
         const body = channelId ? JSON.stringify(publishPayload) : undefined;
         const res = await api(`/api/admin/events/${eventId}/publish`, {
             method: "POST",
@@ -2269,43 +2254,28 @@ async function adminPublish(eventId) {
         });
         const where = channelId ? "" : " в DM";
         if (isVKMode()) {
-            const types = res.publication_types || [];
-            showToast(res.announced
-                ? `✅ Анонс опубликован${types.includes("wall") && types.includes("story") ? " на стене и в истории" : types.includes("wall") ? " на стене" : " в истории"}`
-                : "⚠️ VK не подтвердил автоматическую публикацию");
+            const types = [...(res.publication_types || [])];
+            let wallError = "";
             if (res.manual_fallback && res.manual_post && window.vkBridge) {
-                const useComposer = await tgConfirm(
-                    "VK не подтвердил публикацию на стене. Проверьте стену сообщества; если записи нет, откройте форму для публикации вручную.",
-                    "Открыть VK",
-                );
-                if (useComposer) {
-                    try {
-                        // Native VK dialogs may stay open while the organizer edits the
-                        // post. Do not apply the short timeout used by ordinary Bridge
-                        // requests: it can report a false failure while the composer is
-                        // still open in VK.
-                        const wallPostParams = {
-                            owner_id: res.manual_post.owner_id,
-                            message: res.manual_post.message,
-                        };
-                        if (res.manual_post.attachments) wallPostParams.attachments = res.manual_post.attachments;
-                        const manualResult = await vkBridgeRequest("VKWebAppShowWallPostBox", wallPostParams, null);
-                        if (manualResult && manualResult.post_id && publishPayload.vk_user_access_token) {
-                            await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                    vk_group_id: channelId,
-                                    post_id: Number(manualResult.post_id),
-                                    vk_user_access_token: publishPayload.vk_user_access_token,
-                                }),
-                            });
-                        }
-                        if (manualResult && manualResult.post_id) showToast("✅ Запись опубликована на стене VK");
-                    } catch (e) {
-                        showToast(formatVKBridgeError(e, "VK не смог открыть форму публикации"), true);
-                    }
+                try {
+                    const result = await publishVKWallPostFromMiniApp(channelId, res.manual_post);
+                    await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId }),
+                    });
+                    types.push("wall");
+                } catch (e) {
+                    wallError = formatVKBridgeError(e, "VK не подтвердил публикацию на стене");
                 }
+            }
+            const placed = [types.includes("wall") && "на стене", types.includes("story") && "в истории"].filter(Boolean);
+            if (placed.length && wallError) {
+                showToast(`✅ Анонс опубликован ${placed.join(" и ")}. На стену не удалось: ${wallError}`, true);
+            } else if (placed.length) {
+                showToast(`✅ Анонс опубликован ${placed.join(" и ")}`);
+            } else {
+                showToast(`⚠️ VK не опубликовал анонс: ${wallError || "сообщество не разрешило публикацию истории"}`, true);
             }
         } else {
             showToast(res.announced
@@ -2868,6 +2838,76 @@ function formatVKBridgeError(error, fallback = "Ошибка VK Bridge") {
     if (description) return String(description);
     if (code) return `${fallback} (код ${code})`;
     return fallback;
+}
+
+async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
+    const result = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+        method,
+        params: { ...params, access_token: accessToken, v: "5.199" },
+    });
+    if (result && result.error) throw new Error(formatVKBridgeError(result.error, `Ошибка VK API ${method}`));
+    if (!result || !Object.prototype.hasOwnProperty.call(result, "response")) {
+        throw new Error(`VK не вернул ответ на ${method}`);
+    }
+    return result.response;
+}
+
+async function publishVKWallPostFromMiniApp(groupId, post) {
+    if (!window.vkBridge || !post || !post.message) throw new Error("VK Mini App не готов к публикации");
+    const appId = Number(state.vkAppId);
+    const numericGroupId = Number(groupId);
+    if (!Number.isSafeInteger(appId) || appId <= 0 || !Number.isSafeInteger(numericGroupId) || numericGroupId <= 0) {
+        throw new Error("Не удалось определить VK-приложение или сообщество");
+    }
+
+    // Keep the IP-bound user token inside VK. VKWebAppCallAPIMethod sends the
+    // API request from the active VK client instead of our server.
+    const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
+        app_id: appId,
+        scope: "wall,photos",
+    });
+    if (!auth || !auth.access_token) throw new Error("VK не выдал права wall и photos");
+    const token = auth.access_token;
+
+    let attachment = "";
+    if (post.poster_url) {
+        const posterResponse = await fetch(post.poster_url);
+        if (!posterResponse.ok) throw new Error("Не удалось загрузить афишу мероприятия");
+        const posterBlob = await posterResponse.blob();
+        const upload = await callVKAPIMethodFromMiniApp(
+            "photos.getWallUploadServer", { group_id: numericGroupId }, token,
+        );
+        if (!upload || !upload.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
+
+        const form = new FormData();
+        form.append("photo", posterBlob, `event-${numericGroupId}-poster.jpg`);
+        const uploadResponse = await fetch(upload.upload_url, { method: "POST", body: form });
+        if (!uploadResponse.ok) throw new Error("VK отклонил загрузку афиши");
+        const uploaded = await uploadResponse.json();
+        if (!uploaded || uploaded.server == null || !uploaded.photo || !uploaded.hash) {
+            throw new Error("VK вернул неполные данные загруженной афиши");
+        }
+
+        const savedPhotos = await callVKAPIMethodFromMiniApp("photos.saveWallPhoto", {
+            group_id: numericGroupId,
+            server: uploaded.server,
+            photo: uploaded.photo,
+            hash: uploaded.hash,
+        }, token);
+        const photo = Array.isArray(savedPhotos) ? savedPhotos[0] : null;
+        if (!photo || !photo.owner_id || !photo.id) throw new Error("VK не сохранил афишу");
+        attachment = `photo${photo.owner_id}_${photo.id}`;
+    }
+
+    const result = await callVKAPIMethodFromMiniApp("wall.post", {
+        owner_id: -numericGroupId,
+        from_group: 1,
+        message: post.message,
+        ...(attachment ? { attachments: attachment } : {}),
+    }, token);
+    const postId = Number(result && result.post_id);
+    if (!Number.isSafeInteger(postId) || postId <= 0) throw new Error("VK не вернул ID опубликованной записи");
+    return { postId };
 }
 
 function getVKCommunityTokenMethod(bridge) {
