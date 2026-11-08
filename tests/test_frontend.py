@@ -117,6 +117,13 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
 
 
+def test_vk_manual_wall_composer_waits_for_native_result_and_reports_bridge_error():
+    """The native composer can remain open while edited; keep its rejection detail."""
+    assert 'vkBridgeRequest("VKWebAppShowWallPostBox", wallPostParams, null)' in APP_JS
+    assert "function formatVKBridgeError(error" in APP_JS
+    assert "error.error_code || data.error_code" in APP_JS
+
+
 def test_appjs_vk_ticket_dm_flow():
     """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
     assert "offerVkTicketDm" in APP_JS

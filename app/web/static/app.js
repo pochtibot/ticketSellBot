@@ -2280,11 +2280,16 @@ async function adminPublish(eventId) {
                 );
                 if (useComposer) {
                     try {
-                        const manualResult = await vkBridgeRequest("VKWebAppShowWallPostBox", {
+                        // Native VK dialogs may stay open while the organizer edits the
+                        // post. Do not apply the short timeout used by ordinary Bridge
+                        // requests: it can report a false failure while the composer is
+                        // still open in VK.
+                        const wallPostParams = {
                             owner_id: res.manual_post.owner_id,
                             message: res.manual_post.message,
-                            ...(res.manual_post.attachments ? { attachments: res.manual_post.attachments } : {}),
-                        });
+                        };
+                        if (res.manual_post.attachments) wallPostParams.attachments = res.manual_post.attachments;
+                        const manualResult = await vkBridgeRequest("VKWebAppShowWallPostBox", wallPostParams, null);
                         if (manualResult && manualResult.post_id && publishPayload.vk_user_access_token) {
                             await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
                                 method: "POST",
@@ -2298,7 +2303,7 @@ async function adminPublish(eventId) {
                         }
                         if (manualResult && manualResult.post_id) showToast("✅ Запись опубликована на стене VK");
                     } catch (e) {
-                        showToast(e.message || "Не удалось открыть форму публикации VK", true);
+                        showToast(formatVKBridgeError(e, "VK не смог открыть форму публикации"), true);
                     }
                 }
             }
@@ -2839,6 +2844,7 @@ function renderMyVKGroups(groups) {
 }
 
 async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
+    if (timeoutMs == null) return window.vkBridge.send(method, params);
     let timeoutId;
     try {
         return await Promise.race([
@@ -2850,6 +2856,18 @@ async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+function formatVKBridgeError(error, fallback = "Ошибка VK Bridge") {
+    if (typeof error === "string" && error.trim()) return error;
+    if (!error || typeof error !== "object") return fallback;
+    const data = error.error_data || error.data || {};
+    const description = error.message || error.error_msg || data.error_msg || data.error_reason || data.message;
+    const code = error.error_code || data.error_code;
+    if (description && code) return `${description} (код ${code})`;
+    if (description) return String(description);
+    if (code) return `${fallback} (код ${code})`;
+    return fallback;
 }
 
 function getVKCommunityTokenMethod(bridge) {
