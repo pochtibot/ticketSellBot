@@ -2883,9 +2883,9 @@ async function connectMyVKGroup(groupId) {
             const tokenResult = await vkBridgeRequest(tokenMethod, {
                 app_id: Number(state.vkAppId),
                 group_id: id,
-                // `wall` is not a valid community-token scope. `manage` grants
-                // community administration; the other scopes cover app flows.
-                scope: "manage,messages,photos",
+                // Request every scope supported for community tokens. VK does
+                // not expose `wall` as a community-token scope.
+                scope: "stories,photos,app_widget,messages,docs,manage",
             });
             communityToken = (tokenResult && tokenResult.access_token) || "";
             if (!communityToken) tokenError = "VK подтвердил запрос, но не вернул токен сообщества.";
