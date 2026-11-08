@@ -33,6 +33,7 @@ from app.core.schemas import (
     InviteIssueIn,
     LinkCodeIn,
     LinkConsumeIn,
+    ManualVKPublicationIn,
     MeUpdateIn,
     EventPremiumIn,
     PublishIn,
@@ -65,7 +66,15 @@ from app.web.dependencies import (
 )
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
-from app.web.vk_api import post_to_group_story, verify_group_token, send_vk_ticket_dm
+from app.web.vk_api import (
+    get_group_story_eligibility,
+    post_to_group_story,
+    post_to_group_wall,
+    send_vk_ticket_dm,
+    verify_group_token,
+    verify_vk_user_and_group_admin,
+    verify_vk_wall_post,
+)
 from app.web.vk_pay import (
     VK_PAY_NOTIFICATION_VERSION,
     build_notification_ack,
@@ -1791,7 +1800,10 @@ async def admin_publish_event(
 ):
     """Опубликовать мероприятие + отправить анонс в цель.
 
-    Цель: TG-канал (channel_id) или VK-история сообщества (vk_group_id). Мульти-публикация:
+    Цель: TG-канал (channel_id) или сообщество VK (vk_group_id). Для VK публикуется
+    пост на стене с пользовательским токеном администратора; история добавляется,
+    если сообщество подтверждено или имеет значок «Огонь».
+    Мульти-публикация:
     одно событие может быть опубликовано в N мест (записи event_publications).
     Ошибка анонса не откатывает флаг публикации.
     """
@@ -1808,7 +1820,7 @@ async def admin_publish_event(
             detail="Укажите одну цель публикации: канал или VK-группу",
         )
 
-    # ─── VK-группа (история с афишей) ────────────────────────────
+    # ─── VK-сообщество: пост на стене и, если доступно, история ──
     if body.vk_group_id:
         async with async_session_factory() as session:
             event_svc = EventService(session)
@@ -1835,7 +1847,7 @@ async def admin_publish_event(
             if poster is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Для публикации истории VK сначала добавьте афишу мероприятия",
+                    detail="Для публикации анонса в VK сначала добавьте афишу мероприятия",
                 )
             poster_bytes = bytes(poster.image_data)
 
@@ -1845,29 +1857,99 @@ async def admin_publish_event(
                 if settings.vk_app_id
                 else None
             )
-            ok = await post_to_group_story(
-                group,
-                poster_bytes,
-                link_url=app_link,
-                link_text="ticket" if app_link else None,
+            wall_ok = False
+            wall_attempted = False
+            wall_error = "Нужно разрешение администратора VK на публикацию на стене"
+            user_token = (body.vk_user_access_token or "").strip()
+            if current.platform is PlatformType.vk and user_token:
+                authorized = await verify_vk_user_and_group_admin(
+                    current.telegram_user_id, group.group_id, user_token
+                )
+                if authorized:
+                    wall_attempted = True
+                    event_date = event.date.strftime("%d.%m.%Y %H:%M")
+                    price_text = "Бесплатно" if float(event.price) <= 0 else f"{float(event.price):g} ₽"
+                    lines = [f"🎫 {event.title}"]
+                    if event.description:
+                        lines.extend(["", event.description])
+                    lines.extend([
+                        "",
+                        f"📅 {event_date}",
+                        f"📍 {event.location or 'Место уточняется'}",
+                        f"💰 {price_text}",
+                        f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
+                    ])
+                    if app_link:
+                        lines.extend(["", f"Билеты и подробности: {app_link}"])
+                    wall_ok = await post_to_group_wall(
+                        group.group_id, user_token, poster_bytes, "\n".join(lines)
+                    )
+                    if not wall_ok:
+                        wall_error = "VK не подтвердил публикацию записи на стене"
+                else:
+                    wall_error = "Пользователь VK не подтверждён как администратор выбранного сообщества"
+
+            if wall_attempted:
+                await event_svc.add_publication(
+                    event_id=uid,
+                    platform=PlatformType.vk,
+                    target_type="vk_group_wall",
+                    target_id=group.group_id,
+                    created_by=current.user_id,
+                    status="posted" if wall_ok else "error",
+                    last_error=None if wall_ok else wall_error,
+                )
+
+            # Use VK's current community metadata to avoid predictably rejected
+            # story uploads. Community-token stories are not available to every group.
+            story_eligible = await get_group_story_eligibility(
+                group.group_id, group.community_token or ""
             )
-            await event_svc.add_publication(
-                event_id=uid,
-                platform=PlatformType.vk,
-                target_type="vk_group_story",
-                target_id=group.group_id,
-                created_by=current.user_id,
-                status="posted" if ok else "error",
-                last_error=None if ok else "VK stories.save failed",
-            )
+            story_ok = False
+            story_attempted = False
+            story_error = "Сообщество не подтверждено и не имеет значка «Огонь»"
+            if story_eligible:
+                story_attempted = True
+                story_ok = await post_to_group_story(
+                    group,
+                    poster_bytes,
+                    link_url=app_link,
+                    link_text="ticket" if app_link else None,
+                )
+                if not story_ok:
+                    story_error = "VK не подтвердил публикацию истории"
+            if story_attempted:
+                await event_svc.add_publication(
+                    event_id=uid,
+                    platform=PlatformType.vk,
+                    target_type="vk_group_story",
+                    target_id=group.group_id,
+                    created_by=current.user_id,
+                    status="posted" if story_ok else "error",
+                    last_error=None if story_ok else story_error,
+                )
             await session.commit()
 
         return {
             "id": str(uid),
             "is_published": True,
-            "announced": ok,
+            "announced": wall_ok or story_ok,
             "platform": "vk",
-            "publication_type": "story",
+            "publication_types": (["wall"] if wall_ok else []) + (["story"] if story_ok else []),
+            "wall_attempted": wall_attempted,
+            "story_attempted": story_attempted,
+            "manual_fallback": not wall_ok,
+            "manual_post": {
+                "owner_id": -int(group.group_id),
+                "message": "\n".join([
+                    f"🎫 {event.title}",
+                    f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
+                    f"📍 {event.location or 'Место уточняется'}",
+                    f"💰 {'Бесплатно' if float(event.price) <= 0 else f'{float(event.price):g} ₽'}",
+                    *( ["", f"Билеты и подробности: {app_link}"] if app_link else [] ),
+                ]),
+                "attachments": app_link or "",
+            } if not wall_ok else None,
             "group_id": group.group_id,
         }
 
@@ -1926,6 +2008,53 @@ async def admin_publish_event(
         "announced": announced,
         "dm_sent": dm_sent,
     }
+
+
+@router.post("/admin/events/{event_id}/vk-publications/manual")
+async def record_manual_vk_publication(
+    event_id: str,
+    body: ManualVKPublicationIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Record a wall post confirmed through VKWebAppShowWallPostBox."""
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        group_svc = VKGroupService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        group = await group_svc.get_by_group_id(body.vk_group_id.strip())
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
+        if group.owner_user_id != current.user_id and not current.is_super_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
+        verified = await verify_vk_wall_post(
+            current.telegram_user_id,
+            group.group_id,
+            body.post_id,
+            body.vk_user_access_token,
+        )
+        if not verified:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VK не подтвердил эту запись на стене")
+        await event_svc.add_publication(
+            event_id=uid,
+            platform=PlatformType.vk,
+            target_type="vk_group_wall",
+            target_id=group.group_id,
+            created_by=current.user_id,
+            status="posted",
+        )
+        await session.commit()
+    return {"event_id": str(uid), "group_id": group.group_id, "status": "posted"}
 
 
 @router.get("/admin/events/{event_id}/publications")

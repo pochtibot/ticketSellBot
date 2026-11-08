@@ -77,7 +77,7 @@ user_identities(
 event_publications(
     id, event_id FK,
     platform,          -- telegram | vk
-    target_type,       -- telegram_channel | vk_group_story | vk_group_wall (legacy) | vk_group_message | vk_user_dm
+    target_type,       -- telegram_channel | vk_group_wall | vk_group_story | vk_group_message | vk_user_dm
     target_id,         -- tg channel id | vk group id | vk user id
     created_by, created_at, status, last_error
 )
@@ -95,7 +95,8 @@ vk_groups(
 )
 ```
 - Подписка-изоляция VK-группе **не нужна**: организатор платит подписку на себя (`User.subscription_*`), группа — только цель рассылки. Это следствие новой концепции.
-- Токен сообщества: Mini App получает через `VKWebAppGetCommunityToken` → отправляет на бэкенд → хранится зашифрованным. Для VK-анонса используется история сообщества (`stories.getPhotoUploadServer` → загрузка афиши → `stories.save`); билеты отправляются через `messages.send`.
+- Community token Mini App получает через `VKWebAppGetCommunityToken` → отправляет на бэкенд → хранится зашифрованным. Он используется для Stories, если сообщество подтверждено или имеет значок «Огонь», и для `messages.send`.
+- Пост на стене публикуется через `wall.post` с пользовательским токеном активного VK-администратора (`wall`, `photos`). Токен передаётся только в запросе публикации, сервер проверяет пользователя и его права в группе, затем не сохраняет токен. Афиша проходит `photos.getWallUploadServer` → загрузка → `photos.saveWallPhoto` → `wall.post`.
 
 **`[DECISION]`** Хранение community token: зашифрованный столбец + секрет в env. Точный API-контур и scope — проверить при внедрении (см. Нерешённые вопросы, №1).
 
@@ -169,14 +170,14 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 
 | # | Вопрос | Статус |
 |---|--------|--------|
-| 1 | VK-публикация анонсов и сообщения | 📌 Истории сообщества реализованы; нужна проверка на группе с правом `stories` и требуемым VK статусом сообщества. `wall.post` с текущим типом community token не используется. DM (`messages.send`) реализованы для отправки билетов. |
+| 1 | VK-публикация анонсов и сообщения | ✅ Стена через одноразовый user token администратора; Stories — дополнительный путь для подтверждённых сообществ/со значком «Огонь». При отсутствии автоматического пути открывается ручная форма VK. DM (`messages.send`) используются для отправки билетов. |
 | 2 | Фронтенд VK: переиспользовать `app.js` (общий файл) или отдельный VK-entry | ✅ решено: переиспользован `app.js` (VK-детект) |
 | 3 | `get_or_create` резолвинг identity — правка shared core (backward-compatible) | ✅ сделан backward-compatible (backfill legacy) |
 | 4 | UX добавления соработника (по ID с другой площадки) и права менеджера | ✅ права определены: менеджер — продажи; управление — owner. **UX-кнопка добавления — TODO (в UI)** |
 | 5 | DM-уведомления покупателю в VK (требует `VKWebAppAllowMessagesFromGroup`) | 📌 отложить |
 | 6 | VK Pay для платных билетов | ✅ код заказов/подписанного pay-to-service/callback реализован; выключен до merchant onboarding и sandbox-проверки. Возвраты оплаченных VK-билетов требуют отдельного provider refund flow. Инструкция: `docs/vk-pay-setup.md` |
 | 7 | VK-бот (vkbottle, базовые пользовательские команды `/buy` и т.д.) | 📌 Реализация остаётся в `app/platforms/vk/bot.py`; решение о дальнейшем продукте/развёртывании отдельно от текущего кода Mini App |
-| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения token (сейчас бэкенд принимает token в POST) | ✅ подключён: при добавлении VK-группы в VK-контексте запрашивается community token (scope `wall,messages,manage,photos,app_widget`) и передаётся в POST `/api/me/vk-groups` (2026-08-22) |
+| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения community token | ✅ подключён при добавлении сообщества; запрос прав сообщества включает `stories,messages,manage,photos,app_widget,docs` |
 
 ## 10. Публикация VK Mini App (чек-лист, 2026-08-22)
 

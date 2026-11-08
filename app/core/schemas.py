@@ -262,9 +262,19 @@ class VKGroupRegisterIn(BaseModel):
 
 
 class PublishIn(BaseModel):
-    """Публикация мероприятия: цель — TG-канал (channel_id) или VK-группа (vk_group_id)."""
+    """Публикация мероприятия: TG-канал либо VK-группа."""
     channel_id: Optional[UUID] = None
     vk_group_id: Optional[str] = None
+    # VK user token requested from the active administrator for a wall post.
+    # It is used for this request only and must never be persisted.
+    vk_user_access_token: Optional[str] = Field(default=None, max_length=8192)
+
+
+class ManualVKPublicationIn(BaseModel):
+    """Proof data for a VK Bridge wall post, verified server-side with VK."""
+    vk_group_id: str
+    post_id: int = Field(gt=0)
+    vk_user_access_token: str = Field(min_length=1, max_length=8192)
 
 
 # ─── Payment ─────────────────────────────────────────────────────────────────

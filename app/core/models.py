@@ -208,7 +208,7 @@ class EventPublication(Base):
 
     Одно событие может быть опубликовано в N мест: TG-канал, VK-группа (история),
     сообщения группы, личные сообщения. target_type:
-        telegram_channel | vk_group_story | vk_group_message | vk_user_dm
+        telegram_channel | vk_group_wall | vk_group_story | vk_group_message | vk_user_dm
     """
 
     __tablename__ = "event_publications"

@@ -2027,7 +2027,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Группа для истории VK' : 'Канал для публикации'}</label>
+                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Сообщество для публикации VK' : 'Канал для публикации'}</label>
                 <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
                     ${isVKMode()
                         ? `<option value="">${vkGroups.length ? 'Выберите группу' : 'Нет подключённых VK-групп'}</option>` + vkGroups.map(g =>
@@ -2039,7 +2039,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
             </div>
-            ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для истории VK сначала добавьте афишу мероприятия</span>' : ''}
+            ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для публикации анонса VK сначала добавьте афишу мероприятия</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -2245,18 +2245,68 @@ async function adminPublish(eventId) {
         return;
     }
     try {
-        const body = channelId
-            ? JSON.stringify(isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId })
-            : undefined;
+        let publishPayload = isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId };
+        if (isVKMode()) {
+            // A community key cannot call wall.post. Request a short-lived user
+            // token from the active VK administrator; the server only uses it
+            // for this publication request and never stores it.
+            try {
+                const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
+                    app_id: Number(state.vkAppId),
+                    scope: "groups,wall,photos",
+                });
+                if (auth && auth.access_token) publishPayload.vk_user_access_token = auth.access_token;
+            } catch (_) {
+                // Continue: eligible communities can still receive a story with
+                // their community token; otherwise the native post composer is offered.
+            }
+        }
+        const body = channelId ? JSON.stringify(publishPayload) : undefined;
         const res = await api(`/api/admin/events/${eventId}/publish`, {
             method: "POST",
             headers: body ? { "Content-Type": "application/json" } : undefined,
             body,
         });
         const where = channelId ? "" : " в DM";
-        showToast(res.announced
-            ? (isVKMode() ? "✅ История VK опубликована" : `✅ Опубликовано${where}, анонс отправлен`)
-            : (isVKMode() ? "⚠️ Мероприятие сохранено, история VK не опубликована" : `✅ Опубликовано${where} (анонс не отправлен)`));
+        if (isVKMode()) {
+            const types = res.publication_types || [];
+            showToast(res.announced
+                ? `✅ Анонс опубликован${types.includes("wall") && types.includes("story") ? " на стене и в истории" : types.includes("wall") ? " на стене" : " в истории"}`
+                : "⚠️ VK не подтвердил автоматическую публикацию");
+            if (res.manual_fallback && res.manual_post && window.vkBridge) {
+                const useComposer = await tgConfirm(
+                    "VK не подтвердил публикацию на стене. Проверьте стену сообщества; если записи нет, откройте форму для публикации вручную.",
+                    "Открыть VK",
+                );
+                if (useComposer) {
+                    try {
+                        const manualResult = await vkBridgeRequest("VKWebAppShowWallPostBox", {
+                            owner_id: res.manual_post.owner_id,
+                            message: res.manual_post.message,
+                            ...(res.manual_post.attachments ? { attachments: res.manual_post.attachments } : {}),
+                        });
+                        if (manualResult && manualResult.post_id && publishPayload.vk_user_access_token) {
+                            await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    vk_group_id: channelId,
+                                    post_id: Number(manualResult.post_id),
+                                    vk_user_access_token: publishPayload.vk_user_access_token,
+                                }),
+                            });
+                        }
+                        if (manualResult && manualResult.post_id) showToast("✅ Запись опубликована на стене VK");
+                    } catch (e) {
+                        showToast(e.message || "Не удалось открыть форму публикации VK", true);
+                    }
+                }
+            }
+        } else {
+            showToast(res.announced
+                ? `✅ Опубликовано${where}, анонс отправлен`
+                : `✅ Опубликовано${where} (анонс не отправлен)`);
+        }
     } catch (e) { showToast(e.message || "Ошибка", true); }
     await showAdminEventDetail(eventId);
 }

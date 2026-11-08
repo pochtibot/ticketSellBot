@@ -104,7 +104,10 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
     await db_session.commit()
 
     # ── 5. Публикация афиши в VK-историю группы через web ──
-    with patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True):
+    with (
+        patch("app.web.routes.get_group_story_eligibility", new_callable=AsyncMock, return_value=True),
+        patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True),
+    ):
         resp = await db_client.post(
             f"/api/admin/events/{event.id}/publish",
             headers={"X-Skip-Auth": "1"},
