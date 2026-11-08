@@ -13,6 +13,7 @@ const state = {
     initData: "",
     platform: "telegram", // "telegram" | "vk"
     vkAppId: "",          // VK App ID из launch params (для VKWebAppGetCommunityToken)
+    vkUserId: "",         // ID пользователя из подписанных VK launch params
     vkAdminGroups: null,   // Сообщества, которыми пользователь управляет в VK
     events: [],
     currentEvent: null,
@@ -196,6 +197,7 @@ async function initVKAuth() {
         }
         const lp = normalizeVKLaunchParams(res);
         state.vkAppId = String(lp.vk_app_id || "");
+        state.vkUserId = String(lp.vk_user_id || "");
         if (lp.sign && lp.vk_user_id) {
             const query = Object.entries(lp)
                 .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
@@ -2038,6 +2040,9 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                         ).join('')}
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
+                ${isVKMode() && (event.has_media || event.media_file_id)
+                    ? `<button class="btn btn-sm btn-secondary" onclick="adminPublishToPersonalWall('${event.id}')" title="Для загрузки афиши выберите подключённое сообщество выше">👤 На личную страницу</button>`
+                    : ''}
             </div>
             ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для публикации анонса VK сначала добавьте афишу мероприятия</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
@@ -2325,6 +2330,49 @@ async function adminPublish(eventId) {
     }
     await showAdminEventDetail(eventId);
     if (diagnosticAttemptId) window.__ticketbotVKPublicationAttempt = null;
+}
+
+async function adminPublishToPersonalWall(eventId) {
+    const channelSelect = document.getElementById(`publish_channel_${eventId}`);
+    const sourceGroupId = channelSelect ? channelSelect.value : "";
+    const userId = Number(state.vkUserId);
+    if (!window.vkBridge || !Number.isSafeInteger(userId) || userId <= 0) {
+        showToast("Не удалось определить ID пользователя VK", true);
+        return;
+    }
+    if (!sourceGroupId) {
+        showToast("Выберите подключённое сообщество для загрузки афиши", true);
+        return;
+    }
+
+    const attemptId = window.crypto && typeof window.crypto.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `vk-personal-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    window.__ticketbotVKPublicationAttempt = attemptId;
+    try {
+        const post = await api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-personal-wall-draft`, {
+            method: "POST",
+        });
+        if (Number(post && post.owner_id) !== userId) {
+            throw new Error("ID пользователя VK в приложении и на сервере не совпадают");
+        }
+        const result = await publishVKWallPostFromMiniApp(
+            eventId, sourceGroupId, post, attemptId, userId,
+        );
+        await withVKDiagnosticStage(
+            attemptId, "publication_record", null,
+            () => api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-publications/personal-manual`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ post_id: result.postId }),
+            }),
+        );
+        showToast("✅ Запись опубликована на личной странице VK");
+    } catch (error) {
+        showToast(formatVKBridgeError(error, "Не удалось опубликовать на личной странице VK"), true);
+    } finally {
+        window.__ticketbotVKPublicationAttempt = null;
+    }
 }
 
 async function adminRepost(eventId) {
@@ -2974,12 +3022,16 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
     return result.response;
 }
 
-async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId) {
+async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, targetOwnerId = null) {
     if (!window.vkBridge || !post || !post.poster_url) throw new Error("Для тестовой публикации нужна афиша мероприятия");
     const appId = Number(state.vkAppId);
     const numericGroupId = Number(groupId);
     if (!Number.isSafeInteger(appId) || appId <= 0 || !Number.isSafeInteger(numericGroupId) || numericGroupId <= 0) {
         throw new Error("Не удалось определить VK-приложение или сообщество");
+    }
+    const wallOwnerId = targetOwnerId == null ? -numericGroupId : Number(targetOwnerId);
+    if (!Number.isSafeInteger(wallOwnerId) || wallOwnerId === 0) {
+        throw new Error("Не удалось определить владельца стены VK");
     }
 
     // The photo API needs a user token, which stays inside VK. Publishing itself
@@ -3054,7 +3106,7 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId) {
     const result = await withVKDiagnosticStage(
         attemptId, "wall_composer", "VKWebAppShowWallPostBox",
         () => vkBridgeRequest("VKWebAppShowWallPostBox", {
-            owner_id: -numericGroupId,
+            owner_id: wallOwnerId,
             message: "",
             attachments: attachment,
         }, null),

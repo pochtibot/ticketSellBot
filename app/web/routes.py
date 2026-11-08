@@ -35,6 +35,7 @@ from app.core.schemas import (
     LinkCodeIn,
     LinkConsumeIn,
     ManualVKPublicationIn,
+    ManualVKUserPublicationIn,
     VKClientDiagnosticIn,
     MeUpdateIn,
     EventPremiumIn,
@@ -108,7 +109,7 @@ async def record_vk_client_diagnostic(
 
     extra = {
         "event_type": body.event,
-        "user_id": str(auth_data.get("vk_user_id", "unknown")),
+        "user_id": str(auth_data.get("user", {}).get("id", auth_data.get("vk_user_id", "unknown"))),
         "platform": "vk",
         "attempt_id": body.attempt_id,
         "stage": body.stage,
@@ -2049,6 +2050,86 @@ async def record_manual_vk_publication(
         )
         await session.commit()
     return {"event_id": str(uid), "group_id": group.group_id, "status": "posted"}
+
+
+@router.post("/admin/events/{event_id}/vk-personal-wall-draft")
+async def get_vk_personal_wall_draft(
+    event_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Prepare an event announcement for the VK user's personal wall composer."""
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+    try:
+        uid = UUID(event_id)
+        vk_user_id = int(current.telegram_user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или VK-пользователя")
+    if vk_user_id <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить VK-пользователя")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        poster = await session.get(EventPoster, uid)
+        if poster is None and not event.media_telegram_file_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Для публикации сначала добавьте афишу")
+
+    app_link = f"https://vk.com/app{settings.vk_app_id}?event_id={uid}" if settings.vk_app_id else None
+    return {
+        "owner_id": vk_user_id,
+        "message": "\n".join([
+            f"🎫 {event.title}",
+            *( ["", event.description] if event.description else [] ),
+            "",
+            f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
+            f"📍 {event.location or 'Место уточняется'}",
+            f"💰 {'Бесплатно' if float(event.price) <= 0 else f'{float(event.price):g} ₽'}",
+            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
+            *( ["", f"Билеты и подробности: {app_link}"] if app_link else [] ),
+        ]),
+        "poster_url": f"/api/events/{uid}/media",
+    }
+
+
+@router.post("/admin/events/{event_id}/vk-publications/personal-manual")
+async def record_manual_vk_personal_publication(
+    event_id: str,
+    body: ManualVKUserPublicationIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Record a user-confirmed VK post on the organizer's personal wall."""
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+    try:
+        uid = UUID(event_id)
+        vk_user_id = int(current.telegram_user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или VK-пользователя")
+    if vk_user_id <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить VK-пользователя")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
+        await event_svc.add_publication(
+            event_id=uid,
+            platform=PlatformType.vk,
+            target_type="vk_user_wall",
+            target_id=str(vk_user_id),
+            created_by=current.user_id,
+            status="posted",
+        )
+        await session.commit()
+    return {"event_id": str(uid), "user_id": str(vk_user_id), "status": "posted"}
 
 
 @router.post("/admin/events/{event_id}/vk-wall-photo-upload")

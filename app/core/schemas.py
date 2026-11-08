@@ -273,6 +273,11 @@ class ManualVKPublicationIn(BaseModel):
     post_id: int = Field(gt=0)
 
 
+class ManualVKUserPublicationIn(BaseModel):
+    """A successful personal-wall post reported by VK Bridge."""
+    post_id: int = Field(gt=0)
+
+
 class VKClientDiagnosticIn(BaseModel):
     """Allowlisted, privacy-minimized VK Mini App diagnostic event."""
     event: Literal[

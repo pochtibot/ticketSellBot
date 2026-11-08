@@ -11,6 +11,7 @@ from pathlib import Path
 STATIC = Path(__file__).resolve().parent.parent / "app" / "web" / "static"
 
 APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
+ROUTES = (Path(__file__).resolve().parent.parent / "app" / "web" / "routes.py").read_text(encoding="utf-8")
 INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 VK_APP = (STATIC / "vk-app.html").read_text(encoding="utf-8")
 STYLES = (STATIC / "styles.css").read_text(encoding="utf-8")
@@ -122,7 +123,8 @@ def test_vk_wall_publication_uses_documented_bridge_composer_without_sending_use
     assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
     assert 'scope: "photos"' in APP_JS
     assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' in APP_JS
-    assert 'owner_id: -numericGroupId' in APP_JS
+    assert 'const wallOwnerId = targetOwnerId == null ? -numericGroupId : Number(targetOwnerId)' in APP_JS
+    assert 'owner_id: wallOwnerId' in APP_JS
     assert 'message: ""' in APP_JS
     assert 'callVKAPIMethodFromMiniApp("wall.post"' not in APP_JS
     assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId })' in APP_JS
@@ -144,6 +146,15 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
     assert 'callVKAPIMethodFromMiniApp("wall.post"' not in publish_fn
     assert 'message: post.message' not in publish_fn
     assert 'post.attachments' not in publish_fn
+
+
+def test_vk_can_open_a_separate_composer_for_the_current_users_personal_wall():
+    assert 'state.vkUserId = String(lp.vk_user_id || "")' in APP_JS
+    assert 'onclick="adminPublishToPersonalWall(\'${event.id}\')"' in APP_JS
+    assert 'publishVKWallPostFromMiniApp(\n            eventId, sourceGroupId, post, attemptId, userId,' in APP_JS
+    assert 'owner_id: wallOwnerId' in APP_JS
+    assert 'target_type="vk_user_wall"' in ROUTES
+    assert 'vk-personal-wall-draft' in ROUTES
 
 
 def test_vk_publication_records_bridge_stages_and_client_errors_without_secrets():

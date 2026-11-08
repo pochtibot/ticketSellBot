@@ -194,7 +194,7 @@ def test_vk_client_diagnostics_are_allowlisted_and_redact_secrets(client, caplog
     from app.web.dependencies import validate_init_data
 
     client.app.dependency_overrides[validate_init_data] = lambda: {
-        "platform": "vk", "vk_user_id": "5305539",
+        "platform": "vk", "user": {"id": 5305539},
     }
     payload = {
         "event": "vk.publication.stage",
@@ -213,6 +213,7 @@ def test_vk_client_diagnostics_are_allowlisted_and_redact_secrets(client, caplog
     assert response.status_code == 202
     assert response.json() == {"accepted": True}
     diagnostic = next(record for record in caplog.records if record.getMessage() == "VK Mini App client diagnostic")
+    assert diagnostic.user_id == "5305539"
     assert "secret-value" not in diagnostic.error_message
     assert "signature-value" not in diagnostic.error_message
     assert "access_token=[REDACTED]" in diagnostic.error_message
