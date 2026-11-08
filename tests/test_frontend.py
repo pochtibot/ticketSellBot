@@ -118,8 +118,8 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
 
 
-def test_vk_wall_publication_uses_a_user_token_inside_vk_without_sending_it_to_backend():
-    """The user token stays in VK while API calls publish user and group posts."""
+def test_vk_personal_wall_publication_uses_a_user_token_inside_vk_without_sending_it_to_backend():
+    """The user token stays in VK for the explicitly separate personal-wall path."""
     assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
     assert 'scope: "photos,wall"' in APP_JS
     assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' in APP_JS
@@ -129,7 +129,6 @@ def test_vk_wall_publication_uses_a_user_token_inside_vk_without_sending_it_to_b
     assert 'callVKAPIMethodFromMiniApp("wall.post"' in APP_JS
     assert 'owner_id: numericUserId' in APP_JS
     assert 'message: String(post.message || "")' in APP_JS
-    assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId })' in APP_JS
     assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId, vk_user_access_token' not in APP_JS
     assert "function formatVKBridgeError(error" in APP_JS
     assert "error.error_code || data.error_code" in APP_JS
@@ -148,6 +147,17 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
     assert 'callVKAPIMethodFromMiniApp("wall.post"' in publish_fn
     assert 'message: String(post.message || "")' in publish_fn
     assert 'post.attachments' not in publish_fn
+
+
+def test_vk_group_publication_uses_only_community_token_story_flow():
+    publish_fn = APP_JS.split("async function adminPublish(eventId)", 1)[1].split(
+        "async function adminPublishToPersonalWall", 1
+    )[0]
+    assert 'api(`/api/admin/events/${eventId}/publish`' in publish_fn
+    assert 'types.includes("story")' in publish_fn
+    assert "publishVKWallPostFromMiniApp(" not in publish_fn
+    assert "manual_fallback" not in publish_fn
+    assert "publication_error" in publish_fn
 
 
 def test_vk_can_open_a_separate_composer_for_the_current_users_personal_wall():

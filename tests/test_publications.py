@@ -208,8 +208,10 @@ class TestPublishWeb:
         assert data["announced"] is True
         assert data["platform"] == "vk"
         assert data["publication_types"] == ["story"]
-        assert data["manual_fallback"] is True
-        assert data["manual_post"]["poster_url"] == f"/api/events/{event.id}/media"
+        assert data["story_attempted"] is True
+        assert data["publication_error"] is None
+        assert "manual_fallback" not in data
+        assert "manual_post" not in data
         assert data["group_id"] == group.group_id
 
         # Запись публикации создана
@@ -221,7 +223,7 @@ class TestPublishWeb:
             ("vk_group_story", "posted"),
         }
 
-    async def test_publish_to_vk_group_marks_story_fallback_for_manual_wall(self, db_client, db_session, owner_event_vk_group):
+    async def test_publish_to_vk_group_reports_ineligible_story_without_user_token_fallback(self, db_client, db_session, owner_event_vk_group):
         owner, event, group = owner_event_vk_group
         await db_session.commit()
 
@@ -234,9 +236,10 @@ class TestPublishWeb:
         assert resp.status_code == 200
         data = resp.json()
         assert data["announced"] is False
-        assert data["manual_fallback"] is True
-        assert data["manual_post"]["owner_id"] == -int(group.group_id)
-        assert event.title in data["manual_post"]["message"]
+        assert data["story_attempted"] is False
+        assert data["publication_error"] == "Сообщество не подтверждено и не имеет значка «Огонь»"
+        assert "manual_fallback" not in data
+        assert "manual_post" not in data
 
     async def test_record_vk_bridge_publication_for_linked_group(self, db_client, db_session, owner_event_vk_group):
         owner, event, group = owner_event_vk_group

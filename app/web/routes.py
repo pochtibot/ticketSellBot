@@ -1841,9 +1841,8 @@ async def admin_publish_event(
 ):
     """Опубликовать мероприятие + отправить анонс в цель.
 
-    Цель: TG-канал (channel_id) или сообщество VK (vk_group_id). Для VK публикуется
-    пост на стене с пользовательским токеном администратора; история добавляется,
-    если сообщество подтверждено или имеет значок «Огонь».
+    Цель: TG-канал (channel_id) или сообщество VK (vk_group_id). Для VK афиша
+    публикуется в историю сообщества с community token, если сообщество допущено VK.
     Мульти-публикация:
     одно событие может быть опубликовано в N мест (записи event_publications).
     Ошибка анонса не откатывает флаг публикации.
@@ -1935,24 +1934,7 @@ async def admin_publish_event(
             "publication_types": ["story"] if story_ok else [],
             "wall_attempted": False,
             "story_attempted": story_attempted,
-            # A user token from VKWebAppGetAuthToken is IP-bound. Return the
-            # prepared post to the Mini App so it can upload the poster and open
-            # VK's native wall composer for organizer confirmation.
-            "manual_fallback": True,
-            "manual_post": {
-                "owner_id": -int(group.group_id),
-                "message": "\n".join([
-                    f"🎫 {event.title}",
-                    *( ["", event.description] if event.description else [] ),
-                    "",
-                    f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
-                    f"📍 {event.location or 'Место уточняется'}",
-                    f"💰 {'Бесплатно' if float(event.price) <= 0 else f'{float(event.price):g} ₽'}",
-                    f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
-                    *( ["", f"Билеты и подробности: {app_link}"] if app_link else [] ),
-                ]),
-                "poster_url": f"/api/events/{uid}/media",
-            },
+            "publication_error": None if story_ok else story_error,
             "group_id": group.group_id,
         }
 

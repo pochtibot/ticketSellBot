@@ -2286,32 +2286,10 @@ async function adminPublish(eventId) {
         const where = channelId ? "" : " в DM";
         if (isVKMode()) {
             const types = [...(res.publication_types || [])];
-            let wallError = "";
-            if (res.manual_fallback && res.manual_post && window.vkBridge) {
-                try {
-                    const result = await publishVKWallPostFromMiniApp(
-                        eventId, channelId, res.manual_post, diagnosticAttemptId,
-                    );
-                    await withVKDiagnosticStage(
-                        diagnosticAttemptId, "publication_record", null,
-                        () => api(`/api/admin/events/${eventId}/vk-publications/manual`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId }),
-                        }),
-                    );
-                    types.push("wall");
-                } catch (e) {
-                    wallError = formatVKBridgeError(e, "VK не подтвердил публикацию на стене");
-                }
-            }
-            const placed = [types.includes("wall") && "на стене", types.includes("story") && "в истории"].filter(Boolean);
-            if (placed.length && wallError) {
-                showToast(`✅ Анонс опубликован ${placed.join(" и ")}. На стену не удалось: ${wallError}`, true);
-            } else if (placed.length) {
-                showToast(`✅ Анонс опубликован ${placed.join(" и ")}`);
+            if (types.includes("story")) {
+                showToast("✅ Афиша опубликована в истории сообщества от имени группы");
             } else {
-                showToast(`⚠️ VK не опубликовал анонс: ${wallError || "сообщество не разрешило публикацию истории"}`, true);
+                showToast(`⚠️ Не удалось опубликовать афишу от имени группы: ${res.publication_error || "VK не разрешил публикацию истории"}`, true);
             }
         } else {
             showToast(res.announced
