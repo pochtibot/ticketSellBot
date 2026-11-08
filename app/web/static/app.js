@@ -2853,7 +2853,7 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
 }
 
 async function publishVKWallPostFromMiniApp(groupId, post) {
-    if (!window.vkBridge || !post || !post.message) throw new Error("VK Mini App не готов к публикации");
+    if (!window.vkBridge || !post || !post.poster_url) throw new Error("Для тестовой публикации нужна афиша мероприятия");
     const appId = Number(state.vkAppId);
     const numericGroupId = Number(groupId);
     if (!Number.isSafeInteger(appId) || appId <= 0 || !Number.isSafeInteger(numericGroupId) || numericGroupId <= 0) {
@@ -2898,12 +2898,12 @@ async function publishVKWallPostFromMiniApp(groupId, post) {
         if (!photo || !photo.owner_id || !photo.id) throw new Error("VK не сохранил афишу");
         attachment = `photo${photo.owner_id}_${photo.id}`;
     }
+    if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
 
     const result = await callVKAPIMethodFromMiniApp("wall.post", {
         owner_id: -numericGroupId,
         from_group: 1,
-        message: post.message,
-        ...(attachment ? { attachments: attachment } : {}),
+        attachments: attachment,
     }, token);
     const postId = Number(result && result.post_id);
     if (!Number.isSafeInteger(postId) || postId <= 0) throw new Error("VK не вернул ID опубликованной записи");

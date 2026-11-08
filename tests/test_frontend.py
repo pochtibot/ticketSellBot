@@ -129,6 +129,16 @@ def test_vk_wall_publication_uses_bridge_api_without_sending_user_token_to_backe
     assert "error.error_code || data.error_code" in APP_JS
 
 
+def test_vk_wall_test_publication_contains_only_the_event_photo():
+    publish_fn = APP_JS.split("async function publishVKWallPostFromMiniApp", 1)[1].split(
+        "function getVKCommunityTokenMethod", 1
+    )[0]
+    assert 'post.poster_url' in publish_fn
+    assert 'attachments: attachment' in publish_fn
+    assert 'message: post.message' not in publish_fn
+    assert 'post.attachments' not in publish_fn
+
+
 def test_appjs_vk_ticket_dm_flow():
     """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
     assert "offerVkTicketDm" in APP_JS
