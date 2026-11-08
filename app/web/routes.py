@@ -70,9 +70,11 @@ from app.web.dependencies import (
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
+    VKAPIError,
     get_group_story_eligibility,
     post_to_group_story,
     send_vk_ticket_dm,
+    update_community_event_widget,
     verify_group_token,
 )
 from app.web.vk_pay import (
@@ -1937,7 +1939,6 @@ async def admin_publish_event(
             "publication_error": None if story_ok else story_error,
             "group_id": group.group_id,
         }
-
     # ─── TG-канал / DM (как было) ────────────────────────────────
     target_channel_id: UUID | None = None
     if body.channel_id:
@@ -1992,6 +1993,77 @@ async def admin_publish_event(
         "is_published": True,
         "announced": announced,
         "dm_sent": dm_sent,
+    }
+
+
+@router.post("/admin/events/{event_id}/vk-widget")
+async def admin_update_vk_event_widget(
+    event_id: str,
+    body: PublishIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Update the selected community's app widget with this event's details."""
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+    if not body.vk_group_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите VK-сообщество")
+
+    group_id = body.vk_group_id.strip().lstrip("-")
+    if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID VK-сообщества")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        group_svc = VKGroupService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к мероприятию")
+
+        group = await group_svc.get_by_group_id(group_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не подключено")
+        if group.owner_user_id != current.user_id and not current.is_super_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
+        if not group.community_token:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Для сообщества нужен ключ с правом управления виджетом (app_widget)",
+            )
+
+        try:
+            await update_community_event_widget(group, event)
+        except (VKAPIError, httpx.HTTPError) as exc:
+            logger.warning(
+                "VK widget update rejected for event %s and group %s: %s",
+                uid,
+                group.group_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"VK не обновил виджет: {exc}",
+            ) from exc
+
+        await event_svc.add_publication(
+            event_id=uid,
+            platform=PlatformType.vk,
+            target_type="vk_group_widget",
+            target_id=group.group_id,
+            created_by=current.user_id,
+            status="posted",
+        )
+        await session.commit()
+
+    return {
+        "event_id": str(uid),
+        "group_id": group.group_id,
+        "updated": True,
+        "widget_type": "text",
+        "message": "Виджет сообщества обновлён",
     }
 
 

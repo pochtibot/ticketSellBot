@@ -5,6 +5,7 @@ Community token хранится зашифрованным и расшифро�
 
 import json
 import logging
+from datetime import timezone
 
 import httpx
 
@@ -93,6 +94,35 @@ async def get_group_story_eligibility(group_id: str, community_token: str) -> bo
     except (VKAPIError, TypeError, ValueError, KeyError) as e:
         logger.warning("Could not check VK story eligibility for group %s: %s", group_id, e)
         return False
+
+
+async def update_community_event_widget(group, event) -> None:
+    """Replace a community app's text widget with a compact event card."""
+    token = decrypt_token(group.community_token or "")
+    if not token:
+        raise VKAPIError("Для VK-сообщества не сохранён ключ с правом app_widget")
+
+    event_date = event.date
+    if getattr(event_date, "tzinfo", None) is None:
+        event_date = event_date.replace(tzinfo=timezone.utc)
+    event_date = event_date.astimezone(timezone.utc)
+    date_text = event_date.strftime("%d.%m.%Y в %H:%M UTC")
+    price_text = f"Билет: {event.price} ₽" if event.price and float(event.price) > 0 else "Бесплатно"
+    details = " · ".join(
+        value for value in (date_text, event.location or "Место не указано", price_text) if value
+    )
+    widget = {
+        "title": str(event.title or "Мероприятие")[:100],
+        "text": details[:200],
+        "descr": "Билеты и подробности — в приложении Билетер",
+    }
+    # Values are JSON-encoded so event content cannot escape the VKScript object.
+    await vk_api_call(
+        "appWidgets.update",
+        token,
+        type="text",
+        code=f"return {json.dumps(widget, ensure_ascii=False)};",
+    )
 
 
 async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
