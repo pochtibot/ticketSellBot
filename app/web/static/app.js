@@ -2041,7 +2041,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
                 ${isVKMode() && (event.has_media || event.media_file_id)
-                    ? `<button class="btn btn-sm btn-secondary" onclick="adminPublishToPersonalWall('${event.id}')" title="Для загрузки афиши выберите подключённое сообщество выше">👤 На личную страницу</button>`
+                    ? `<button class="btn btn-sm btn-secondary" onclick="adminPublishToPersonalWall('${event.id}')">👤 На личную страницу</button>`
                     : ''}
             </div>
             ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для публикации анонса VK сначала добавьте афишу мероприятия</span>' : ''}
@@ -2333,18 +2333,11 @@ async function adminPublish(eventId) {
 }
 
 async function adminPublishToPersonalWall(eventId) {
-    const channelSelect = document.getElementById(`publish_channel_${eventId}`);
-    const sourceGroupId = channelSelect ? channelSelect.value : "";
     const userId = Number(state.vkUserId);
     if (!window.vkBridge || !Number.isSafeInteger(userId) || userId <= 0) {
         showToast("Не удалось определить ID пользователя VK", true);
         return;
     }
-    if (!sourceGroupId) {
-        showToast("Выберите подключённое сообщество для загрузки афиши", true);
-        return;
-    }
-
     const attemptId = window.crypto && typeof window.crypto.randomUUID === "function"
         ? window.crypto.randomUUID()
         : `vk-personal-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
@@ -2357,7 +2350,7 @@ async function adminPublishToPersonalWall(eventId) {
             throw new Error("ID пользователя VK в приложении и на сервере не совпадают");
         }
         const result = await publishVKWallPostFromMiniApp(
-            eventId, sourceGroupId, post, attemptId, userId,
+            eventId, null, post, attemptId, null,
         );
         await withVKDiagnosticStage(
             attemptId, "publication_record", null,
@@ -3022,15 +3015,27 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
     return result.response;
 }
 
-async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, targetOwnerId = null) {
+async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, targetOwnerId = undefined) {
     if (!window.vkBridge || !post || !post.poster_url) throw new Error("Для тестовой публикации нужна афиша мероприятия");
     const appId = Number(state.vkAppId);
-    const numericGroupId = Number(groupId);
-    if (!Number.isSafeInteger(appId) || appId <= 0 || !Number.isSafeInteger(numericGroupId) || numericGroupId <= 0) {
-        throw new Error("Не удалось определить VK-приложение или сообщество");
+    const numericGroupId = groupId == null ? null : Number(groupId);
+    const numericUserId = Number(state.vkUserId);
+    const isPersonalWall = targetOwnerId === null;
+    if (!Number.isSafeInteger(appId) || appId <= 0) {
+        throw new Error("Не удалось определить VK-приложение");
     }
-    const wallOwnerId = targetOwnerId == null ? -numericGroupId : Number(targetOwnerId);
-    if (!Number.isSafeInteger(wallOwnerId) || wallOwnerId === 0) {
+    if (isPersonalWall && numericGroupId !== null) {
+        throw new Error("Для личной стены не нужно указывать сообщество");
+    }
+    if (isPersonalWall && (!Number.isSafeInteger(numericUserId) || numericUserId <= 0)) {
+        throw new Error("Не удалось определить VK-пользователя");
+    }
+    if (!isPersonalWall && (!Number.isSafeInteger(numericGroupId) || numericGroupId <= 0)) {
+        throw new Error("Не удалось определить VK-сообщество");
+    }
+    const wallOwnerId = isPersonalWall ? null
+        : (targetOwnerId === undefined ? -numericGroupId : Number(targetOwnerId));
+    if (!isPersonalWall && (!Number.isSafeInteger(wallOwnerId) || wallOwnerId === 0)) {
         throw new Error("Не удалось определить владельца стены VK");
     }
 
@@ -3062,7 +3067,8 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
             attemptId, "photo_upload_server", "VKWebAppCallAPIMethod",
             async () => {
                 const result = await callVKAPIMethodFromMiniApp(
-                    "photos.getWallUploadServer", { group_id: numericGroupId }, token,
+                    "photos.getWallUploadServer",
+                    isPersonalWall ? {} : { group_id: numericGroupId }, token,
                 );
                 if (!result || !result.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
                 return result;
@@ -3075,7 +3081,8 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
                 method: "POST",
                 headers: {
                     "Content-Type": posterBlob.type || "image/jpeg",
-                    "X-VK-Group-ID": String(numericGroupId),
+                    "X-VK-Photo-Target": isPersonalWall ? "user" : "group",
+                    ...(!isPersonalWall ? { "X-VK-Group-ID": String(numericGroupId) } : {}),
                     "X-VK-Upload-URL": upload.upload_url,
                 },
                 body: posterBlob,
@@ -3089,7 +3096,8 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
             attemptId, "photo_save", "VKWebAppCallAPIMethod",
             async () => {
                 const savedPhotos = await callVKAPIMethodFromMiniApp("photos.saveWallPhoto", {
-                    group_id: numericGroupId,
+                    ...(isPersonalWall ? { user_id: numericUserId } : {}),
+                    ...(!isPersonalWall ? { group_id: numericGroupId } : {}),
                     server: uploaded.server,
                     photo: uploaded.photo,
                     hash: uploaded.hash,
@@ -3103,13 +3111,14 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
     }
     if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
 
+    const composerParams = {
+        message: "",
+        attachments: attachment,
+    };
+    if (!isPersonalWall) composerParams.owner_id = wallOwnerId;
     const result = await withVKDiagnosticStage(
         attemptId, "wall_composer", "VKWebAppShowWallPostBox",
-        () => vkBridgeRequest("VKWebAppShowWallPostBox", {
-            owner_id: wallOwnerId,
-            message: "",
-            attachments: attachment,
-        }, null),
+        () => vkBridgeRequest("VKWebAppShowWallPostBox", composerParams, null),
     );
     const postId = Number(result && result.post_id);
     if (!Number.isSafeInteger(postId) || postId <= 0) {

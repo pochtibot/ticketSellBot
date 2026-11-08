@@ -2150,6 +2150,7 @@ async def relay_vk_wall_photo_upload(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
 
+    photo_target = (request.headers.get("X-VK-Photo-Target") or "group").strip().lower()
     group_id = (request.headers.get("X-VK-Group-ID") or "").strip().lstrip("-")
     upload_url = request.headers.get("X-VK-Upload-URL") or ""
     try:
@@ -2169,8 +2170,13 @@ async def relay_vk_wall_photo_upload(
         or parsed_url.password
     ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VK вернул недопустимый адрес загрузки")
-    if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное VK-сообщество")
+    if photo_target not in {"group", "user"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная цель загрузки фотографии")
+    if photo_target == "group":
+        if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное VK-сообщество")
+    elif group_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Для личной стены нельзя передавать VK-сообщество")
 
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].lower()
     if content_type not in {"image/jpeg", "image/png", "image/webp"}:
@@ -2192,17 +2198,18 @@ async def relay_vk_wall_photo_upload(
 
     async with async_session_factory() as session:
         event_svc = EventService(session)
-        group_svc = VKGroupService(session)
         event = await event_svc.get_by_id(uid)
         if event is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
         if not _can_manage_event(current, event):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        group = await group_svc.get_by_group_id(group_id)
-        if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
-        if group.owner_user_id != current.user_id and not current.is_super_admin:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
+        if photo_target == "group":
+            group_svc = VKGroupService(session)
+            group = await group_svc.get_by_group_id(group_id)
+            if group is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
+            if group.owner_user_id != current.user_id and not current.is_super_admin:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
 
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:

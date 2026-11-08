@@ -123,8 +123,8 @@ def test_vk_wall_publication_uses_documented_bridge_composer_without_sending_use
     assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
     assert 'scope: "photos"' in APP_JS
     assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' in APP_JS
-    assert 'const wallOwnerId = targetOwnerId == null ? -numericGroupId : Number(targetOwnerId)' in APP_JS
-    assert 'owner_id: wallOwnerId' in APP_JS
+    assert 'targetOwnerId === undefined ? -numericGroupId : Number(targetOwnerId)' in APP_JS
+    assert 'if (!isPersonalWall) composerParams.owner_id = wallOwnerId' in APP_JS
     assert 'message: ""' in APP_JS
     assert 'callVKAPIMethodFromMiniApp("wall.post"' not in APP_JS
     assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId })' in APP_JS
@@ -151,8 +151,11 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
 def test_vk_can_open_a_separate_composer_for_the_current_users_personal_wall():
     assert 'state.vkUserId = String(lp.vk_user_id || "")' in APP_JS
     assert 'onclick="adminPublishToPersonalWall(\'${event.id}\')"' in APP_JS
-    assert 'publishVKWallPostFromMiniApp(\n            eventId, sourceGroupId, post, attemptId, userId,' in APP_JS
-    assert 'owner_id: wallOwnerId' in APP_JS
+    assert 'publishVKWallPostFromMiniApp(\n            eventId, null, post, attemptId, null,' in APP_JS
+    assert '"photos.getWallUploadServer",\n                    isPersonalWall ? {} : { group_id: numericGroupId }' in APP_JS
+    assert '"X-VK-Photo-Target": isPersonalWall ? "user" : "group"' in APP_JS
+    assert '...(!isPersonalWall ? { group_id: numericGroupId } : {})' in APP_JS
+    assert 'if (!isPersonalWall) composerParams.owner_id = wallOwnerId' in APP_JS
     assert 'target_type="vk_user_wall"' in ROUTES
     assert 'vk-personal-wall-draft' in ROUTES
 
