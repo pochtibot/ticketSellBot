@@ -3039,11 +3039,11 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
         throw new Error("Не удалось определить владельца стены VK");
     }
 
-    // The photo API needs a user token, which stays inside VK. Publishing itself
-    // uses VK's native composer and asks the organizer to confirm the post.
+    // Keep the user token inside VK. A direct personal wall.post requires both
+    // photo upload and wall permissions.
     const auth = await withVKDiagnosticStage(attemptId, "auth", "VKWebAppGetAuthToken", async () => {
-        const result = await vkBridgeRequest("VKWebAppGetAuthToken", { app_id: appId, scope: "photos" });
-        if (!result || !result.access_token) throw new Error("VK не выдал право photos");
+        const result = await vkBridgeRequest("VKWebAppGetAuthToken", { app_id: appId, scope: "photos,wall" });
+        if (!result || !result.access_token) throw new Error("VK не выдал пользовательский токен");
         return result;
     });
     const token = auth.access_token;
@@ -3110,6 +3110,31 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
         attachment = `photo${photo.owner_id}_${photo.id}`;
     }
     if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
+
+    if (isPersonalWall) {
+        const response = await withVKDiagnosticStage(
+            attemptId, "wall_post", "VKWebAppCallAPIMethod",
+            () => callVKAPIMethodFromMiniApp("wall.post", {
+                owner_id: numericUserId,
+                message: String(post.message || ""),
+                attachments: attachment,
+            }, token),
+        );
+        const postId = Number(response && response.post_id);
+        if (!Number.isSafeInteger(postId) || postId <= 0) {
+            logVKClientDiagnostic("vk.publication.result", attemptId, {
+                stage: "wall_post", status: "missing_post_id",
+                bridge_method: "VKWebAppCallAPIMethod", api_method: "wall.post",
+                error_message: "VK API не вернул ID опубликованной записи",
+            });
+            throw new Error("VK API не вернул ID опубликованной записи");
+        }
+        logVKClientDiagnostic("vk.publication.result", attemptId, {
+            stage: "wall_post", status: "success",
+            bridge_method: "VKWebAppCallAPIMethod", api_method: "wall.post",
+        });
+        return { postId };
+    }
 
     const composerParams = {
         message: "",
