@@ -53,6 +53,11 @@ def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
     assert 'scope: "wall,stories,photos,app_widget,messages,docs,manage"' not in APP_JS
 
 
+def test_vk_connected_group_can_refresh_community_token_scopes():
+    assert 'linked.has_token ? "Обновить права" : "Выдать токен"' in APP_JS
+    assert 'g.has_token ? "Обновить права" : "Выдать токен"' in APP_JS
+
+
 def test_appjs_has_linking_ui():
     assert "createVKLinkCode" in APP_JS
     assert "linkVKByCode" in APP_JS

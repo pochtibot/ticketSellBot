@@ -7,7 +7,7 @@
 2. VK-пользователь вводит код → вход по VK ведёт на канон организатора.
 3. Организатор добавляет VK-группу (self-service, token шифруется).
 4. Создаёт мероприятие (owner) + соработника (менеджера).
-5. Публикует анонс в VK-группу (стена) — запись event_publications.
+5. Публикует афишу в VK-историю группы — запись event_publications.
 6. Покупатель (VK, отдельный аккаунт) покупает билет.
 7. Организатор проверяет билет по коду (проверил в TG, куплено в VK) —
    киллер-фича: check-in по коду работает с любой площадки.
@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet
 
-from app.core.models import PlatformType, SubscriptionTier, Event
+from app.core.models import EventPoster, PlatformType, SubscriptionTier, Event
 from app.core.services import UserService, EventService, VKGroupService, TicketService
 
 TEST_KEY = Fernet.generate_key().decode()
@@ -98,12 +98,13 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
         owner_user_id=org.id,
     )
     event.is_published = True
+    db_session.add(EventPoster(event_id=event.id, image_data=b"poster-bytes", content_type="image/jpeg"))
     mgr = await user_svc.get_or_create(PlatformType.telegram, "vk_mgr", name="Менеджер")
     await event_svc.add_manager(event.id, mgr.id)
     await db_session.commit()
 
-    # ── 5. Публикация в VK-группу (стена) через web ──
-    with patch("app.web.routes.post_to_group_wall", new_callable=AsyncMock, return_value=True):
+    # ── 5. Публикация афиши в VK-историю группы через web ──
+    with patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True):
         resp = await db_client.post(
             f"/api/admin/events/{event.id}/publish",
             headers={"X-Skip-Auth": "1"},
@@ -116,7 +117,7 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
         f"/api/admin/events/{event.id}/publications", headers={"X-Skip-Auth": "1"},
     )
     pubs = resp.json()["publications"]
-    assert any(p["target_type"] == "vk_group_wall" and p["status"] == "posted" for p in pubs)
+    assert any(p["target_type"] == "vk_group_story" and p["status"] == "posted" for p in pubs)
 
     # ── 6. Покупатель из VK покупает билет ──
     ticket = await ticket_svc.buy_ticket(buyer.id, event.id)

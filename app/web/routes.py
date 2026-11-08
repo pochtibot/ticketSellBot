@@ -63,10 +63,9 @@ from app.web.dependencies import (
     require_super_admin,
     validate_init_data,
 )
-from app.platforms.telegram.formatting import format_event_text
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
-from app.web.vk_api import post_to_group_wall, verify_group_token, send_vk_ticket_dm
+from app.web.vk_api import post_to_group_story, verify_group_token, send_vk_ticket_dm
 from app.web.vk_pay import (
     VK_PAY_NOTIFICATION_VERSION,
     build_notification_ack,
@@ -1792,7 +1791,7 @@ async def admin_publish_event(
 ):
     """Опубликовать мероприятие + отправить анонс в цель.
 
-    Цель: TG-канал (channel_id) или VK-группа (vk_group_id). Мульти-публикация:
+    Цель: TG-канал (channel_id) или VK-история сообщества (vk_group_id). Мульти-публикация:
     одно событие может быть опубликовано в N мест (записи event_publications).
     Ошибка анонса не откатывает флаг публикации.
     """
@@ -1809,7 +1808,7 @@ async def admin_publish_event(
             detail="Укажите одну цель публикации: канал или VK-группу",
         )
 
-    # ─── VK-группа (стена) ───────────────────────────────────────
+    # ─── VK-группа (история с афишей) ────────────────────────────
     if body.vk_group_id:
         async with async_session_factory() as session:
             event_svc = EventService(session)
@@ -1832,17 +1831,34 @@ async def admin_publish_event(
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
+            poster = await session.get(EventPoster, uid)
+            if poster is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Для публикации истории VK сначала добавьте афишу мероприятия",
+                )
+            poster_bytes = bytes(poster.image_data)
+
             await event_svc.update(uid, is_published=True)
-            text = format_event_text(event, mode="full")
-            ok = await post_to_group_wall(group, text)
+            app_link = (
+                f"https://vk.com/app{settings.vk_app_id}?event_id={uid}"
+                if settings.vk_app_id
+                else None
+            )
+            ok = await post_to_group_story(
+                group,
+                poster_bytes,
+                link_url=app_link,
+                link_text="ticket" if app_link else None,
+            )
             await event_svc.add_publication(
                 event_id=uid,
                 platform=PlatformType.vk,
-                target_type="vk_group_wall",
+                target_type="vk_group_story",
                 target_id=group.group_id,
                 created_by=current.user_id,
                 status="posted" if ok else "error",
-                last_error=None if ok else "VK wall.post failed",
+                last_error=None if ok else "VK stories.save failed",
             )
             await session.commit()
 
@@ -1851,6 +1867,7 @@ async def admin_publish_event(
             "is_published": True,
             "announced": ok,
             "platform": "vk",
+            "publication_type": "story",
             "group_id": group.group_id,
         }
 

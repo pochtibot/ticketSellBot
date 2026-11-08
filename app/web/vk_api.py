@@ -1,12 +1,9 @@
-"""VK API клиент — публикация анонсов мероприятий в VK-группы.
+"""VK API клиент для историй сообществ и личных сообщений.
 
-Использует community token группы (хранится зашифрованным, расшифровывается
-через app/core/crypto.py) и метод wall.post (стена группы).
-
-Messages/DM (vk_group_message, vk_user_dm) — требуют прав сообщений сообщества
-и диалогов; реализуются отдельно (см. нерешённые вопросы в плане).
+Community token хранится зашифрованным и расшифровывается только для API-запроса.
 """
 
+import json
 import logging
 
 import httpx
@@ -94,25 +91,65 @@ async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
         return False
 
 
-async def post_to_group_wall(group, text: str) -> bool:
-    """Опубликовать анонс на стену VK-группы.
-
-    Returns True on success, False on error (logged, not raised).
-    """
+async def post_to_group_story(
+    group,
+    image: bytes,
+    *,
+    link_url: str | None = None,
+    link_text: str | None = None,
+) -> bool:
+    """Загрузить афишу в историю VK-сообщества и опубликовать её."""
     token = decrypt_token(group.community_token or "")
     if not token:
         logger.warning("Нет community token для VK-группы %s", group.group_id)
         return False
+    if not image:
+        logger.warning("Для истории VK не передана афиша сообщества %s", group.group_id)
+        return False
+    if bool(link_url) != bool(link_text):
+        logger.warning("Для ссылки истории VK нужны оба параметра: link_url и link_text")
+        return False
+
     try:
-        await vk_api_call(
-            "wall.post",
+        params = {"group_id": int(group.group_id.lstrip("-"))}
+        if link_url and link_text:
+            params.update(link_url=link_url, link_text=link_text)
+        upload_server = await vk_api_call("stories.getPhotoUploadServer", token, **params)
+        upload_url = upload_server.get("upload_url")
+        if not upload_url:
+            raise VKAPIError("VK не вернул upload_url для истории")
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                upload_url,
+                files={"file0": ("poster.jpg", image, "image/jpeg")},
+            )
+            response.raise_for_status()
+            upload_data = response.json()
+
+        upload_result = upload_data.get("upload_result")
+        if not upload_result and isinstance(upload_data.get("response"), dict):
+            upload_result = upload_data["response"].get("upload_result")
+        if not upload_result:
+            raise VKAPIError("VK не вернул результат загрузки афиши")
+
+        saved = await vk_api_call(
+            "stories.save",
             token,
-            owner_id=f"-{group.group_id.lstrip('-')}",
-            from_group=1,
-            message=text,
+            upload_results_json=json.dumps(
+                [{"upload_result": upload_result}], ensure_ascii=False
+            ),
         )
-        logger.info("Анонс опубликован в VK-группу %s", group.group_id)
+        items = saved.get("items", []) if isinstance(saved, dict) else []
+        if not items:
+            raise VKAPIError("VK не подтвердил публикацию истории")
+        story_id = items[0].get("id") if isinstance(items[0], dict) else None
+        logger.info(
+            "История опубликована в VK-группу %s%s",
+            group.group_id,
+            f" (story_id={story_id})" if story_id else "",
+        )
         return True
-    except VKAPIError as e:
-        logger.error("Ошибка публикации в VK-группу %s: %s", group.group_id, e)
+    except (VKAPIError, httpx.HTTPError, ValueError, KeyError) as e:
+        logger.error("Ошибка публикации истории в VK-группу %s: %s", group.group_id, e)
         return False

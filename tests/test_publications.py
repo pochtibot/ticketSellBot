@@ -1,8 +1,7 @@
 """
 Публикации события в цели — event_publications (#164).
 
-Одно мероприятие публикуется в N мест: TG-канал / VK-группа (стена).
-Постинг в VK — через community token (wall.post).
+VK-анонс публикуется фотоисторией сообщества с community token.
 """
 
 import uuid
@@ -13,9 +12,9 @@ import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 
-from app.core.models import PlatformType, SubscriptionTier, VKGroup
+from app.core.models import EventPoster, PlatformType, SubscriptionTier, VKGroup
 from app.core.services import UserService, EventService, VKGroupService
-from app.web.vk_api import VKAPIError, post_to_group_wall
+from app.web.vk_api import VKAPIError, post_to_group_story
 
 TEST_KEY = Fernet.generate_key().decode()
 
@@ -39,6 +38,7 @@ async def owner_event_vk_group(db_session):
         owner_user_id=owner.id,
     )
     event.is_published = True
+    db_session.add(EventPoster(event_id=event.id, image_data=b"poster-bytes", content_type="image/jpeg"))
     await db_session.flush()
 
     with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):
@@ -58,28 +58,28 @@ async def test_add_publication_and_list(db_session, owner_event_vk_group):
     event_svc = EventService(db_session)
 
     await event_svc.add_publication(
-        event.id, PlatformType.vk, "vk_group_wall", group.group_id,
+        event.id, PlatformType.vk, "vk_group_story", group.group_id,
         created_by=owner.id, status="posted",
     )
     pubs = await event_svc.list_publications(event.id)
     assert len(pubs) == 1
-    assert pubs[0].target_type == "vk_group_wall"
+    assert pubs[0].target_type == "vk_group_story"
     assert pubs[0].status == "posted"
 
 
 async def test_add_publication_idempotent(db_session, owner_event_vk_group):
     owner, event, group = owner_event_vk_group
     event_svc = EventService(db_session)
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_wall", group.group_id)
+    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id)
     # Повторная публикация в ту же цель — обновление, не дубликат
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_wall", group.group_id, status="posted")
+    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id, status="posted")
     assert len(await event_svc.list_publications(event.id)) == 1
 
 
 async def test_remove_publication(db_session, owner_event_vk_group):
     owner, event, group = owner_event_vk_group
     event_svc = EventService(db_session)
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_wall", group.group_id)
+    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id)
     pid = (await event_svc.list_publications(event.id))[0].id
     assert await event_svc.remove_publication(pid) is True
     assert await event_svc.list_publications(event.id) == []
@@ -89,32 +89,62 @@ async def test_remove_publication(db_session, owner_event_vk_group):
 
 
 class TestVKAPI:
-    async def test_post_to_group_wall_success(self):
+    async def test_post_to_group_story_success(self):
         group = VKGroup(group_id="123", community_token="")
+        class UploadResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"upload_result": "uploaded-story-hash"}
+
+        class UploadClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, url, files):
+                assert url == "https://upload.vk.test/story"
+                assert files["file0"][1] == b"poster"
+                return UploadResponse()
+
+        api_responses = [
+            {"upload_url": "https://upload.vk.test/story"},
+            {"items": [{"id": 42}]},
+        ]
         with (
             patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, return_value={"post_id": 1}) as call,
+            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, side_effect=api_responses) as call,
+            patch("app.web.vk_api.httpx.AsyncClient", side_effect=lambda **kwargs: UploadClient()),
         ):
             group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-            assert await post_to_group_wall(group, "Анонс") is True
-            call.assert_awaited_once()
-            kwargs = call.await_args
-            assert kwargs.args[0] == "wall.post"
-            assert kwargs.kwargs["owner_id"] == "-123"
-            assert kwargs.kwargs["from_group"] == 1
+            assert await post_to_group_story(
+                group,
+                b"poster",
+                link_url="https://vk.com/app123?event_id=event-1",
+                link_text="ticket",
+            ) is True
+            assert [call_args.args[0] for call_args in call.await_args_list] == [
+                "stories.getPhotoUploadServer", "stories.save"
+            ]
+            assert call.await_args_list[0].kwargs["group_id"] == 123
+            assert call.await_args_list[0].kwargs["link_text"] == "ticket"
+            assert "uploaded-story-hash" in call.await_args_list[1].kwargs["upload_results_json"]
 
-    async def test_post_to_group_wall_no_token(self):
+    async def test_post_to_group_story_no_token(self):
         group = VKGroup(group_id="123", community_token="")
-        assert await post_to_group_wall(group, "Анонс") is False
+        assert await post_to_group_story(group, b"poster") is False
 
-    async def test_post_to_group_wall_api_error(self):
+    async def test_post_to_group_story_api_error(self):
         group = VKGroup(group_id="123", community_token="")
         with (
             patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
             patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, side_effect=VKAPIError("boom")),
         ):
             group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-            assert await post_to_group_wall(group, "Анонс") is False
+            assert await post_to_group_story(group, b"poster") is False
 
 
 # ─── Web API ─────────────────────────────────────────────────────
@@ -125,7 +155,7 @@ class TestPublishWeb:
         owner, event, group = owner_event_vk_group
         await db_session.commit()
 
-        with patch("app.web.routes.post_to_group_wall", new_callable=AsyncMock, return_value=True):
+        with patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True):
             resp = await db_client.post(
                 f"/api/admin/events/{event.id}/publish",
                 headers={"X-Skip-Auth": "1"},
@@ -135,6 +165,7 @@ class TestPublishWeb:
         data = resp.json()
         assert data["announced"] is True
         assert data["platform"] == "vk"
+        assert data["publication_type"] == "story"
         assert data["group_id"] == group.group_id
 
         # Запись публикации создана
@@ -143,8 +174,23 @@ class TestPublishWeb:
         )
         pubs = resp.json()["publications"]
         assert len(pubs) == 1
-        assert pubs[0]["target_type"] == "vk_group_wall"
+        assert pubs[0]["target_type"] == "vk_group_story"
         assert pubs[0]["status"] == "posted"
+
+    async def test_publish_to_vk_group_requires_poster(self, db_client, db_session, owner_event_vk_group):
+        owner, event, group = owner_event_vk_group
+        poster = await db_session.get(EventPoster, event.id)
+        await db_session.delete(poster)
+        await db_session.commit()
+
+        resp = await db_client.post(
+            f"/api/admin/events/{event.id}/publish",
+            headers={"X-Skip-Auth": "1"},
+            json={"vk_group_id": group.group_id},
+        )
+
+        assert resp.status_code == 409
+        assert "афишу" in resp.json()["detail"]
 
     async def test_publish_to_foreign_vk_group_403(self, db_client, db_session, owner_event_vk_group):
         owner, event, group = owner_event_vk_group
@@ -186,7 +232,7 @@ class TestPublishWeb:
     async def test_remove_publication(self, db_client, db_session, owner_event_vk_group):
         owner, event, group = owner_event_vk_group
         await db_session.commit()
-        with patch("app.web.routes.post_to_group_wall", new_callable=AsyncMock, return_value=True):
+        with patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True):
             await db_client.post(
                 f"/api/admin/events/{event.id}/publish",
                 headers={"X-Skip-Auth": "1"},

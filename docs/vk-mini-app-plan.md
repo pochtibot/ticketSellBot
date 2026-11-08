@@ -77,7 +77,7 @@ user_identities(
 event_publications(
     id, event_id FK,
     platform,          -- telegram | vk
-    target_type,       -- telegram_channel | vk_group_wall | vk_group_message | vk_user_dm
+    target_type,       -- telegram_channel | vk_group_story | vk_group_wall (legacy) | vk_group_message | vk_user_dm
     target_id,         -- tg channel id | vk group id | vk user id
     created_by, created_at, status, last_error
 )
@@ -95,7 +95,7 @@ vk_groups(
 )
 ```
 - Подписка-изоляция VK-группе **не нужна**: организатор платит подписку на себя (`User.subscription_*`), группа — только цель рассылки. Это следствие новой концепции.
-- Токен сообщества: Mini App через `VKWebAppGetCommunityToken` (группы, где пользователь админ и установлено приложение) → отправляет на бэкенд → храним зашифрованным → постим `wall.post` / `messages.send`.
+- Токен сообщества: Mini App получает через `VKWebAppGetCommunityToken` → отправляет на бэкенд → хранится зашифрованным. Для VK-анонса используется история сообщества (`stories.getPhotoUploadServer` → загрузка афиши → `stories.save`); билеты отправляются через `messages.send`.
 
 **`[DECISION]`** Хранение community token: зашифрованный столбец + секрет в env. Точный API-контур и scope — проверить при внедрении (см. Нерешённые вопросы, №1).
 
@@ -169,7 +169,7 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 
 | # | Вопрос | Статус |
 |---|--------|--------|
-| 1 | VK-постинг в чужие группы: точный scope `VKWebAppGetCommunityToken`, права `wall.post`/`messages.send`, хранение токена | ✅ частично: `wall.post` реализован (зашифрованный токен); **сообщения/DM (`messages.send`) — TODO** |
+| 1 | VK-публикация анонсов и сообщения | 📌 Истории сообщества реализованы; нужна проверка на группе с правом `stories` и требуемым VK статусом сообщества. `wall.post` с текущим типом community token не используется. DM (`messages.send`) реализованы для отправки билетов. |
 | 2 | Фронтенд VK: переиспользовать `app.js` (общий файл) или отдельный VK-entry | ✅ решено: переиспользован `app.js` (VK-детект) |
 | 3 | `get_or_create` резолвинг identity — правка shared core (backward-compatible) | ✅ сделан backward-compatible (backfill legacy) |
 | 4 | UX добавления соработника (по ID с другой площадки) и права менеджера | ✅ права определены: менеджер — продажи; управление — owner. **UX-кнопка добавления — TODO (в UI)** |
@@ -205,7 +205,7 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 2. ✅ **VK-аутентификация** — `feature/vk-auth` (#161): `vk_auth.py` (sign), резолв канона.
 3. ✅ **Соработники** — `feature/vk-managers` (#162): `event_managers`, права.
 4. ✅ **VK-группы** — `feature/vk-groups` (#163): `vk_groups`, self-service, шифрование token.
-5. ✅ **Публикации** — `feature/vk-publications` (#164): `event_publications`, `wall.post`.
+5. ✅ **Публикации** — `feature/vk-publications` (#164): `event_publications`; текущий VK-анонс публикуется историей сообщества с афишей.
 6. ✅ **Фронтенд** — `feature/vk-frontend` (#165): переиспользование `app.js`, vk-app.html.
 7. ✅ **Тесты** — `feature/vk-testing` (#166): сквозной контур VK.
 

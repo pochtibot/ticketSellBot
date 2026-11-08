@@ -2027,7 +2027,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Группа для публикации' : 'Канал для публикации'}</label>
+                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Группа для истории VK' : 'Канал для публикации'}</label>
                 <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
                     ${isVKMode()
                         ? `<option value="">${vkGroups.length ? 'Выберите группу' : 'Нет подключённых VK-групп'}</option>` + vkGroups.map(g =>
@@ -2039,6 +2039,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
             </div>
+            ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для истории VK сначала добавьте афишу мероприятия</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -2254,8 +2255,8 @@ async function adminPublish(eventId) {
         });
         const where = channelId ? "" : " в DM";
         showToast(res.announced
-            ? `✅ Опубликовано${where}, анонс отправлен`
-            : `✅ Опубликовано${where} (анонс не отправлен)`);
+            ? (isVKMode() ? "✅ История VK опубликована" : `✅ Опубликовано${where}, анонс отправлен`)
+            : (isVKMode() ? "⚠️ Мероприятие сохранено, история VK не опубликована" : `✅ Опубликовано${where} (анонс не отправлен)`));
     } catch (e) { showToast(e.message || "Ошибка", true); }
     await showAdminEventDetail(eventId);
 }
@@ -2749,7 +2750,7 @@ function renderMyVKGroups(groups) {
                     </div>
                     ${linked
                         ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
-                            ${linked.has_token ? "" : `<button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${groupId}')">Выдать токен</button>`}
+                            <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${groupId}')">${linked.has_token ? "Обновить права" : "Выдать токен"}</button>
                             <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${groupId}')">Удалить</button>
                         </div>`
                         : `<button class="btn btn-sm btn-primary" onclick="connectMyVKGroup('${groupId}')">Подключить</button>`}
@@ -2777,7 +2778,7 @@ function renderMyVKGroups(groups) {
                         <div class="hint">ID: ${escapeHtml(g.group_id)}</div>
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        ${g.has_token ? "" : `<button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${escapeHtml(g.group_id)}')">Выдать токен</button>`}
+                        <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${escapeHtml(g.group_id)}')">${g.has_token ? "Обновить права" : "Выдать токен"}</button>
                         <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${escapeHtml(g.group_id)}')">Удалить</button>
                     </div>
                 </div>`;
