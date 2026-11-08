@@ -2833,7 +2833,10 @@ function renderMyVKGroups(groups) {
         <h2 style="margin-bottom:16px">Мои VK-группы</h2>
         <p class="hint" style="margin-bottom:14px">Загрузите сообщества, которыми вы управляете в VK. Подключите нужное сообщество и подтвердите права для публикации анонсов и отправки билетов.</p>
         ${canLoadVKGroups
-            ? `<button class="btn btn-primary" onclick="addMyVKGroup()" style="margin-bottom:16px">↻ Загрузить мои сообщества VK</button>`
+            ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+                <button class="btn btn-primary" onclick="addMyVKGroup()">↻ Загрузить мои сообщества VK</button>
+                <button class="btn btn-secondary" onclick="installVKAppToCommunity()">Установить Билетёр в сообщество</button>
+            </div>`
             : `<p class="hint" style="margin-bottom:16px">Список сообществ доступен, когда приложение открыто внутри VK.</p>`}
     `;
 
@@ -3228,6 +3231,34 @@ async function addMyVKGroup() {
     } catch (e) {
         hideLoading();
         showToast(e.message || "Не удалось загрузить сообщества VK", true);
+    }
+}
+
+async function installVKAppToCommunity() {
+    if (state.platform !== "vk" || !window.vkBridge) {
+        showToast("Откройте приложение внутри VK, чтобы установить его в сообщество", true);
+        return;
+    }
+
+    showLoading();
+    try {
+        const method = "VKWebAppAddToCommunity";
+        if (typeof window.vkBridge.supportsAsync === "function"
+            && !await window.vkBridge.supportsAsync(method)) {
+            throw new Error("Эта версия VK не поддерживает установку приложения в сообщество");
+        }
+        const result = await vkBridgeRequest(method, {}, 60000);
+        const groupId = Number(result && result.group_id);
+        if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+            throw new Error("VK не подтвердил установку приложения в сообщество");
+        }
+        const community = (state.vkAdminGroups || []).find(group => Number(group.id || group.group_id) === groupId);
+        const title = community?.name || `сообщество ${groupId}`;
+        showToast(`✅ Билетёр установлен в ${title}. Если группы нет в выборе публикации, сначала подключите её в кабинете.`);
+    } catch (e) {
+        showToast(e.message || "VK не установил приложение в сообщество", true);
+    } finally {
+        hideLoading();
     }
 }
 

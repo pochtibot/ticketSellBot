@@ -47,6 +47,19 @@ def test_appjs_has_vk_groups_ui():
     assert "removeMyVKGroup" in APP_JS
 
 
+def test_vk_groups_page_can_install_the_mini_app_into_a_community():
+    assert 'onclick="installVKAppToCommunity()"' in APP_JS
+    install_fn = APP_JS.split("async function installVKAppToCommunity()", 1)[1].split(
+        "async function connectMyVKGroup", 1
+    )[0]
+    assert '"VKWebAppAddToCommunity"' in install_fn
+    assert "supportsAsync(method)" in install_fn
+    assert "result.group_id" in install_fn
+    # Installation is additive: the existing group linking/token flow remains available.
+    assert 'onclick="addMyVKGroup()"' in APP_JS
+    assert "async function connectMyVKGroup(groupId)" in APP_JS
+
+
 def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
     assert "function getVKCommunityTokenMethod(bridge)" in APP_JS
     assert '"VKWebAppGetCommunityAuthToken"' in APP_JS
