@@ -2040,6 +2040,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                         ).join('')}
                 </select>
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">📢 Опубликовать</button>
+                ${isVKMode() ? `<button class="btn btn-sm btn-secondary" onclick="adminPreviewCommunityWidget('${event.id}')">🧩 Виджет мероприятия</button>` : ''}
                 ${isVKMode() && (event.has_media || event.media_file_id)
                     ? `<button class="btn btn-sm btn-secondary" onclick="adminPublishToPersonalWall('${event.id}')">👤 На личную страницу</button>`
                     : ''}
@@ -2308,6 +2309,57 @@ async function adminPublish(eventId) {
     }
     await showAdminEventDetail(eventId);
     if (diagnosticAttemptId) window.__ticketbotVKPublicationAttempt = null;
+}
+
+async function adminPreviewCommunityWidget(eventId) {
+    const groupSelect = document.getElementById(`publish_channel_${eventId}`);
+    const groupId = Number(groupSelect && groupSelect.value);
+    const event = state.currentAdminEvent;
+    if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+        showToast("Выберите VK-сообщество", true);
+        return;
+    }
+    if (!event || String(event.id) !== String(eventId)) {
+        showToast("Не удалось загрузить мероприятие", true);
+        return;
+    }
+    if (!window.vkBridge) {
+        showToast("Предпросмотр виджета доступен в приложении ВКонтакте", true);
+        return;
+    }
+    if (typeof window.vkBridge.supportsAsync === "function"
+        && !await window.vkBridge.supportsAsync("VKWebAppShowCommunityWidgetPreviewBox")) {
+        showToast("VK разрешает устанавливать виджет только в поддерживаемом клиенте, обычно в полной веб-версии", true);
+        return;
+    }
+
+    const date = new Date(event.date);
+    const dateText = Number.isNaN(date.getTime())
+        ? String(event.date || "")
+        : date.toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" });
+    const details = [
+        dateText,
+        event.location || "Место не указано",
+        Number(event.price) > 0 ? `Билет: ${formatPrice(event.price)}` : "Бесплатно",
+    ].filter(Boolean).join(" · ");
+    // The community widget editor expects VKScript that returns a text-widget object.
+    // JSON.stringify keeps event-provided text from becoming executable VKScript.
+    const widget = {
+        title: String(event.title || "Мероприятие").slice(0, 100),
+        text: details.slice(0, 200),
+        descr: "Билеты и подробности — в приложении Билетер",
+    };
+    const code = `return ${JSON.stringify(widget)};`;
+    try {
+        await vkBridgeRequest("VKWebAppShowCommunityWidgetPreviewBox", {
+            group_id: groupId,
+            type: "text",
+            code,
+        }, null);
+        showToast("Предпросмотр виджета открыт. Подтвердите его установку в VK.");
+    } catch (e) {
+        showToast(e.message || "VK не открыл предпросмотр виджета", true);
+    }
 }
 
 async function adminPublishToPersonalWall(eventId) {

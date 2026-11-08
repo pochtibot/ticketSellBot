@@ -160,6 +160,17 @@ def test_vk_group_publication_uses_only_community_token_story_flow():
     assert "publication_error" in publish_fn
 
 
+def test_vk_event_widget_uses_bridge_preview_for_selected_community():
+    assert 'adminPreviewCommunityWidget(\'${event.id}\')' in APP_JS
+    widget_fn = APP_JS.split("async function adminPreviewCommunityWidget(eventId)", 1)[1].split(
+        "async function adminPublishToPersonalWall", 1
+    )[0]
+    assert '"VKWebAppShowCommunityWidgetPreviewBox"' in widget_fn
+    assert 'type: "text"' in widget_fn
+    assert "JSON.stringify(widget)" in widget_fn
+    assert "group_id: groupId" in widget_fn
+
+
 def test_vk_can_open_a_separate_composer_for_the_current_users_personal_wall():
     assert 'state.vkUserId = String(lp.vk_user_id || "")' in APP_JS
     assert 'onclick="adminPublishToPersonalWall(\'${event.id}\')"' in APP_JS
