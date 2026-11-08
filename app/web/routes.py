@@ -1893,8 +1893,8 @@ async def admin_publish_event(
             "wall_attempted": False,
             "story_attempted": story_attempted,
             # A user token from VKWebAppGetAuthToken is IP-bound. Return the
-            # prepared post to the Mini App so it can upload the poster and call
-            # wall.post through VKWebAppCallAPIMethod inside the VK client.
+            # prepared post to the Mini App so it can upload the poster and open
+            # VK's native wall composer for organizer confirmation.
             "manual_fallback": True,
             "manual_post": {
                 "owner_id": -int(group.group_id),
@@ -1976,7 +1976,7 @@ async def record_manual_vk_publication(
     body: ManualVKPublicationIn,
     current: CurrentUser = Depends(get_current_user),
 ):
-    """Record a successful post returned by VKWebAppCallAPIMethod / wall.post."""
+    """Record a successful post returned by VKWebAppShowWallPostBox."""
     if current.platform is not PlatformType.vk:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
     try:

@@ -2860,13 +2860,13 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post) {
         throw new Error("Не удалось определить VK-приложение или сообщество");
     }
 
-    // Keep the IP-bound user token inside VK. VKWebAppCallAPIMethod sends the
-    // API request from the active VK client instead of our server.
+    // The photo API needs a user token, which stays inside VK. Publishing itself
+    // uses VK's native composer and asks the organizer to confirm the post.
     const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
         app_id: appId,
-        scope: "wall,photos",
+        scope: "photos",
     });
-    if (!auth || !auth.access_token) throw new Error("VK не выдал права wall и photos");
+    if (!auth || !auth.access_token) throw new Error("VK не выдал право photos");
     const token = auth.access_token;
 
     let attachment = "";
@@ -2909,11 +2909,11 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post) {
     }
     if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
 
-    const result = await callVKAPIMethodFromMiniApp("wall.post", {
+    const result = await vkBridgeRequest("VKWebAppShowWallPostBox", {
         owner_id: -numericGroupId,
-        from_group: 1,
+        message: "",
         attachments: attachment,
-    }, token);
+    }, null);
     const postId = Number(result && result.post_id);
     if (!Number.isSafeInteger(postId) || postId <= 0) throw new Error("VK не вернул ID опубликованной записи");
     return { postId };

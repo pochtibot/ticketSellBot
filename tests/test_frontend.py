@@ -117,14 +117,16 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
 
 
-def test_vk_wall_publication_uses_bridge_api_without_sending_user_token_to_backend():
-    """The IP-bound VK user token stays in Mini App for wall.post."""
+def test_vk_wall_publication_uses_documented_bridge_composer_without_sending_user_token_to_backend():
+    """Photos are uploaded with an in-client token; VK's composer publishes after user confirmation."""
     assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
-    assert 'scope: "wall,photos"' in APP_JS
-    assert 'callVKAPIMethodFromMiniApp("wall.post"' in APP_JS
+    assert 'scope: "photos"' in APP_JS
+    assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' in APP_JS
+    assert 'owner_id: -numericGroupId' in APP_JS
+    assert 'message: ""' in APP_JS
+    assert 'callVKAPIMethodFromMiniApp("wall.post"' not in APP_JS
     assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId })' in APP_JS
     assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId, vk_user_access_token' not in APP_JS
-    assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' not in APP_JS
     assert "function formatVKBridgeError(error" in APP_JS
     assert "error.error_code || data.error_code" in APP_JS
 
@@ -138,6 +140,8 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
     assert 'api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`' in publish_fn
     assert 'fetch(upload.upload_url' not in publish_fn
     assert 'attachments: attachment' in publish_fn
+    assert 'message: ""' in publish_fn
+    assert 'callVKAPIMethodFromMiniApp("wall.post"' not in publish_fn
     assert 'message: post.message' not in publish_fn
     assert 'post.attachments' not in publish_fn
 
