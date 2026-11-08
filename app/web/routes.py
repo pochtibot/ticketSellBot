@@ -35,6 +35,7 @@ from app.core.schemas import (
     LinkCodeIn,
     LinkConsumeIn,
     ManualVKPublicationIn,
+    VKClientDiagnosticIn,
     MeUpdateIn,
     EventPremiumIn,
     PublishIn,
@@ -84,6 +85,47 @@ from app.web.vk_pay import (
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
+
+
+@router.post("/client-diagnostics/vk", status_code=status.HTTP_202_ACCEPTED)
+async def record_vk_client_diagnostic(
+    body: VKClientDiagnosticIn,
+    auth_data: dict = Depends(validate_init_data),
+):
+    """Accept privacy-minimized client diagnostics from authenticated VK Mini Apps."""
+    if auth_data.get("platform") != "vk":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+
+    error_message = body.error_message
+    if error_message:
+        # Defense in depth: never persist tokens, signatures, or signed URL query values.
+        import re
+        error_message = re.sub(
+            r"(?i)(access_token|vk_access_token|sign|hash|token)=([^&\s]+)",
+            r"\1=[REDACTED]",
+            error_message,
+        )[:240]
+
+    extra = {
+        "event_type": body.event,
+        "user_id": str(auth_data.get("vk_user_id", "unknown")),
+        "platform": "vk",
+        "attempt_id": body.attempt_id,
+        "stage": body.stage,
+        "status": body.status,
+        "vk_platform": body.vk_platform,
+        "client_version": body.client_version,
+        "bridge_method": body.bridge_method,
+        "duration_ms": body.duration_ms,
+        "error_type": body.error_type,
+        "error_code": body.error_code,
+        "error_message": error_message,
+    }
+    if body.event in {"js.error", "js.unhandledrejection"} or body.status == "failed":
+        logger.warning("VK Mini App client diagnostic", extra=extra)
+    else:
+        logger.info("VK Mini App client diagnostic", extra=extra)
+    return {"accepted": True}
 
 
 async def _uploaded_poster_event_ids(session, event_ids: list[UUID]) -> set[UUID]:

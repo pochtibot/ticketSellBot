@@ -2244,6 +2244,27 @@ async function adminPublish(eventId) {
         showToast("Подключите VK-группу и выберите её для публикации", true);
         return;
     }
+    const diagnosticAttemptId = isVKMode()
+        ? (window.crypto && typeof window.crypto.randomUUID === "function"
+            ? window.crypto.randomUUID()
+            : `vk-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`)
+        : null;
+    if (diagnosticAttemptId) {
+        window.__ticketbotVKPublicationAttempt = diagnosticAttemptId;
+        if (!window.__ticketbotVKClientVersion && window.vkBridge) {
+            vkBridgeRequest("VKWebAppGetClientVersion", {}, 1500)
+                .then(result => {
+                    const version = result && result.platform && result.version
+                        ? `${result.platform}/${result.version}`
+                        : result && result.version;
+                    if (version) window.__ticketbotVKClientVersion = String(version).slice(0, 40);
+                })
+                .catch(() => {});
+        }
+        logVKClientDiagnostic("vk.publication.stage", diagnosticAttemptId, {
+            stage: "publish_request", status: "started",
+        });
+    }
     try {
         const publishPayload = isVKMode() ? { vk_group_id: channelId } : { channel_id: channelId };
         const body = channelId ? JSON.stringify(publishPayload) : undefined;
@@ -2252,18 +2273,28 @@ async function adminPublish(eventId) {
             headers: body ? { "Content-Type": "application/json" } : undefined,
             body,
         });
+        if (diagnosticAttemptId) {
+            logVKClientDiagnostic("vk.publication.stage", diagnosticAttemptId, {
+                stage: "publish_request", status: "success",
+            });
+        }
         const where = channelId ? "" : " в DM";
         if (isVKMode()) {
             const types = [...(res.publication_types || [])];
             let wallError = "";
             if (res.manual_fallback && res.manual_post && window.vkBridge) {
                 try {
-                    const result = await publishVKWallPostFromMiniApp(eventId, channelId, res.manual_post);
-                    await api(`/api/admin/events/${eventId}/vk-publications/manual`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId }),
-                    });
+                    const result = await publishVKWallPostFromMiniApp(
+                        eventId, channelId, res.manual_post, diagnosticAttemptId,
+                    );
+                    await withVKDiagnosticStage(
+                        diagnosticAttemptId, "publication_record", null,
+                        () => api(`/api/admin/events/${eventId}/vk-publications/manual`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId }),
+                        }),
+                    );
                     types.push("wall");
                 } catch (e) {
                     wallError = formatVKBridgeError(e, "VK не подтвердил публикацию на стене");
@@ -2282,8 +2313,18 @@ async function adminPublish(eventId) {
                 ? `✅ Опубликовано${where}, анонс отправлен`
                 : `✅ Опубликовано${where} (анонс не отправлен)`);
         }
-    } catch (e) { showToast(e.message || "Ошибка", true); }
+    } catch (e) {
+        if (diagnosticAttemptId) {
+            logVKClientDiagnostic("vk.publication.result", diagnosticAttemptId, {
+                stage: "publish_request", status: "failed",
+                error_type: e && e.name ? String(e.name).slice(0, 32) : undefined,
+                error_message: sanitizeVKDiagnosticMessage(e && e.message || e),
+            });
+        }
+        showToast(e.message || "Ошибка", true);
+    }
     await showAdminEventDetail(eventId);
+    if (diagnosticAttemptId) window.__ticketbotVKPublicationAttempt = null;
 }
 
 async function adminRepost(eventId) {
@@ -2828,6 +2869,87 @@ async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
     }
 }
 
+function vkDiagnosticPlatform() {
+    const platform = new URLSearchParams(window.location.search).get("vk_platform");
+    const allowed = new Set([
+        "mobile_android", "mobile_iphone", "mobile_ipad", "mobile_web",
+        "desktop_web", "desktop_web_messenger", "desktop_app_messenger",
+        "mobile_android_messenger", "mobile_iphone_messenger",
+    ]);
+    return allowed.has(platform) ? platform : undefined;
+}
+
+function sanitizeVKDiagnosticMessage(value) {
+    return String(value || "").replace(
+        /(access_token|vk_access_token|sign|hash|token)=([^\s&]+)/gi,
+        "$1=[REDACTED]",
+    ).slice(0, 240);
+}
+
+function logVKClientDiagnostic(event, attemptId, fields = {}) {
+    if (state.platform !== "vk" || !state.initData || !attemptId) return;
+    const payload = { event, attempt_id: attemptId, vk_platform: vkDiagnosticPlatform(), ...fields };
+    if (window.__ticketbotVKClientVersion) payload.client_version = window.__ticketbotVKClientVersion;
+    if (payload.error_message) payload.error_message = sanitizeVKDiagnosticMessage(payload.error_message);
+    fetch("/api/client-diagnostics/vk", {
+        method: "POST",
+        headers: { "X-VK-Init-Data": state.initData, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true,
+    }).catch(() => {});
+}
+
+async function withVKDiagnosticStage(attemptId, stage, bridgeMethod, operation) {
+    const startedAt = performance.now();
+    logVKClientDiagnostic("vk.publication.stage", attemptId, {
+        stage, status: "started", bridge_method: bridgeMethod,
+    });
+    try {
+        const result = await operation();
+        logVKClientDiagnostic("vk.publication.stage", attemptId, {
+            stage, status: "success", bridge_method: bridgeMethod,
+            duration_ms: Math.round(performance.now() - startedAt),
+        });
+        return result;
+    } catch (error) {
+        const data = error && (error.error_data || error.data) || {};
+        const errorType = error && (error.error_type || error.name);
+        const errorCode = error && (error.error_code ?? data.error_code);
+        const fields = {
+            stage, status: "failed", bridge_method: bridgeMethod,
+            duration_ms: Math.round(performance.now() - startedAt),
+            error_type: errorType ? String(errorType).slice(0, 32) : undefined,
+            error_code: errorCode == null ? undefined : String(errorCode).slice(0, 32),
+            error_message: sanitizeVKDiagnosticMessage(formatVKBridgeError(error)),
+        };
+        logVKClientDiagnostic("vk.publication.stage", attemptId, fields);
+        logVKClientDiagnostic("vk.publication.result", attemptId, fields);
+        throw error;
+    }
+}
+
+if (!window.__ticketbotVKErrorHandlersInstalled) {
+    window.__ticketbotVKErrorHandlersInstalled = true;
+    window.addEventListener("error", event => {
+        const attemptId = window.__ticketbotVKPublicationAttempt;
+        if (!attemptId || state.platform !== "vk") return;
+        logVKClientDiagnostic("js.error", attemptId, {
+            stage: "frontend", status: "failed", error_type: "ErrorEvent",
+            error_message: sanitizeVKDiagnosticMessage(event.message || "JavaScript error"),
+        });
+    });
+    window.addEventListener("unhandledrejection", event => {
+        const attemptId = window.__ticketbotVKPublicationAttempt;
+        if (!attemptId || state.platform !== "vk") return;
+        const reason = event.reason;
+        logVKClientDiagnostic("js.unhandledrejection", attemptId, {
+            stage: "frontend", status: "failed",
+            error_type: reason && reason.name ? String(reason.name).slice(0, 32) : "UnhandledRejection",
+            error_message: sanitizeVKDiagnosticMessage(reason && reason.message || reason || "Unhandled promise rejection"),
+        });
+    });
+}
+
 function formatVKBridgeError(error, fallback = "Ошибка VK Bridge") {
     if (typeof error === "string" && error.trim()) return error;
     if (!error || typeof error !== "object") return fallback;
@@ -2852,7 +2974,7 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
     return result.response;
 }
 
-async function publishVKWallPostFromMiniApp(eventId, groupId, post) {
+async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId) {
     if (!window.vkBridge || !post || !post.poster_url) throw new Error("Для тестовой публикации нужна афиша мероприятия");
     const appId = Number(state.vkAppId);
     const numericGroupId = Number(groupId);
@@ -2862,60 +2984,94 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post) {
 
     // The photo API needs a user token, which stays inside VK. Publishing itself
     // uses VK's native composer and asks the organizer to confirm the post.
-    const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
-        app_id: appId,
-        scope: "photos",
+    const auth = await withVKDiagnosticStage(attemptId, "auth", "VKWebAppGetAuthToken", async () => {
+        const result = await vkBridgeRequest("VKWebAppGetAuthToken", { app_id: appId, scope: "photos" });
+        if (!result || !result.access_token) throw new Error("VK не выдал право photos");
+        return result;
     });
-    if (!auth || !auth.access_token) throw new Error("VK не выдал право photos");
     const token = auth.access_token;
 
     let attachment = "";
     if (post.poster_url) {
-        let posterResponse;
-        try {
-            posterResponse = await fetch(post.poster_url);
-        } catch (error) {
-            throw new Error(`Не удалось получить афишу с сервера: ${error.message || "ошибка сети"}`);
-        }
-        if (!posterResponse.ok) throw new Error("Не удалось загрузить афишу мероприятия");
-        const posterBlob = await posterResponse.blob();
-        const upload = await callVKAPIMethodFromMiniApp(
-            "photos.getWallUploadServer", { group_id: numericGroupId }, token,
-        );
-        if (!upload || !upload.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
-
-        const uploaded = await api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`, {
-            method: "POST",
-            headers: {
-                "Content-Type": posterBlob.type || "image/jpeg",
-                "X-VK-Group-ID": String(numericGroupId),
-                "X-VK-Upload-URL": upload.upload_url,
+        const posterBlob = await withVKDiagnosticStage(
+            attemptId, "poster_download", null,
+            async () => {
+                let posterResponse;
+                try {
+                    posterResponse = await fetch(post.poster_url);
+                } catch (error) {
+                    throw new Error(`Не удалось получить афишу с сервера: ${error.message || "ошибка сети"}`);
+                }
+                if (!posterResponse.ok) throw new Error("Не удалось загрузить афишу мероприятия");
+                return posterResponse.blob();
             },
-            body: posterBlob,
-        });
+        );
+        const upload = await withVKDiagnosticStage(
+            attemptId, "photo_upload_server", "VKWebAppCallAPIMethod",
+            async () => {
+                const result = await callVKAPIMethodFromMiniApp(
+                    "photos.getWallUploadServer", { group_id: numericGroupId }, token,
+                );
+                if (!result || !result.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
+                return result;
+            },
+        );
+
+        const uploaded = await withVKDiagnosticStage(
+            attemptId, "photo_upload_relay", null,
+            () => api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": posterBlob.type || "image/jpeg",
+                    "X-VK-Group-ID": String(numericGroupId),
+                    "X-VK-Upload-URL": upload.upload_url,
+                },
+                body: posterBlob,
+            }),
+        );
         if (!uploaded || uploaded.server == null || !uploaded.photo || !uploaded.hash) {
             throw new Error("VK вернул неполные данные загруженной афиши");
         }
 
-        const savedPhotos = await callVKAPIMethodFromMiniApp("photos.saveWallPhoto", {
-            group_id: numericGroupId,
-            server: uploaded.server,
-            photo: uploaded.photo,
-            hash: uploaded.hash,
-        }, token);
-        const photo = Array.isArray(savedPhotos) ? savedPhotos[0] : null;
-        if (!photo || !photo.owner_id || !photo.id) throw new Error("VK не сохранил афишу");
+        const photo = await withVKDiagnosticStage(
+            attemptId, "photo_save", "VKWebAppCallAPIMethod",
+            async () => {
+                const savedPhotos = await callVKAPIMethodFromMiniApp("photos.saveWallPhoto", {
+                    group_id: numericGroupId,
+                    server: uploaded.server,
+                    photo: uploaded.photo,
+                    hash: uploaded.hash,
+                }, token);
+                const savedPhoto = Array.isArray(savedPhotos) ? savedPhotos[0] : null;
+                if (!savedPhoto || !savedPhoto.owner_id || !savedPhoto.id) throw new Error("VK не сохранил афишу");
+                return savedPhoto;
+            },
+        );
         attachment = `photo${photo.owner_id}_${photo.id}`;
     }
     if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
 
-    const result = await vkBridgeRequest("VKWebAppShowWallPostBox", {
-        owner_id: -numericGroupId,
-        message: "",
-        attachments: attachment,
-    }, null);
+    const result = await withVKDiagnosticStage(
+        attemptId, "wall_composer", "VKWebAppShowWallPostBox",
+        () => vkBridgeRequest("VKWebAppShowWallPostBox", {
+            owner_id: -numericGroupId,
+            message: "",
+            attachments: attachment,
+        }, null),
+    );
     const postId = Number(result && result.post_id);
-    if (!Number.isSafeInteger(postId) || postId <= 0) throw new Error("VK не вернул ID опубликованной записи");
+    if (!Number.isSafeInteger(postId) || postId <= 0) {
+        logVKClientDiagnostic("vk.publication.result", attemptId, {
+            stage: "wall_composer", status: "missing_post_id",
+            bridge_method: "VKWebAppShowWallPostBox",
+            error_message: "VK завершил форму без post_id",
+        });
+        throw new Error("VK не вернул ID опубликованной записи");
+    }
+    logVKClientDiagnostic("vk.publication.result", attemptId, {
+        stage: "wall_composer", status: "success",
+        bridge_method: "VKWebAppShowWallPostBox",
+    });
     return { postId };
 }
 

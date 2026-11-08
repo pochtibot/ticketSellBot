@@ -146,6 +146,17 @@ def test_vk_wall_test_publication_contains_only_the_event_photo():
     assert 'post.attachments' not in publish_fn
 
 
+def test_vk_publication_records_bridge_stages_and_client_errors_without_secrets():
+    assert 'fetch("/api/client-diagnostics/vk"' in APP_JS
+    assert 'window.addEventListener("error"' in APP_JS
+    assert 'window.addEventListener("unhandledrejection"' in APP_JS
+    assert '"VKWebAppShowWallPostBox"' in APP_JS
+    assert '"vk.publication.result"' in APP_JS
+    assert '"X-VK-Init-Data": state.initData' in APP_JS
+    assert '"$1=[REDACTED]"' in APP_JS
+    assert 'error.stack' not in APP_JS
+
+
 def test_appjs_vk_ticket_dm_flow():
     """VK: мягкий запрос → VKWebAppAllowMessagesFromGroup → POST send-vk."""
     assert "offerVkTicketDm" in APP_JS

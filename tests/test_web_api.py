@@ -141,6 +141,7 @@ class TestInitDataValidation:
                 validate_init_data(x_init_data=bad_data, x_skip_auth=None)
             assert exc.value.status_code == 401
 
+
     def test_validate_wrong_signature(self):
         """Неверная подпись должна вызывать 401."""
         from app.web.dependencies import validate_init_data
@@ -187,6 +188,48 @@ class TestInitDataValidation:
             with pytest.raises(HTTPException) as exc:
                 validate_init_data(x_init_data=None, x_skip_auth="1")
         assert exc.value.status_code == 401
+
+
+def test_vk_client_diagnostics_are_allowlisted_and_redact_secrets(client, caplog):
+    from app.web.dependencies import validate_init_data
+
+    client.app.dependency_overrides[validate_init_data] = lambda: {
+        "platform": "vk", "vk_user_id": "5305539",
+    }
+    payload = {
+        "event": "vk.publication.stage",
+        "attempt_id": "attempt-12345678",
+        "stage": "wall_composer",
+        "status": "failed",
+        "vk_platform": "mobile_android",
+        "bridge_method": "VKWebAppShowWallPostBox",
+        "error_type": "client_error",
+        "error_code": "11",
+        "error_message": "denied access_token=secret-value sign=signature-value",
+    }
+    with caplog.at_level("WARNING", logger="ticketbot.web.routes"):
+        response = client.post("/api/client-diagnostics/vk", json=payload)
+
+    assert response.status_code == 202
+    assert response.json() == {"accepted": True}
+    diagnostic = next(record for record in caplog.records if record.getMessage() == "VK Mini App client diagnostic")
+    assert "secret-value" not in diagnostic.error_message
+    assert "signature-value" not in diagnostic.error_message
+    assert "access_token=[REDACTED]" in diagnostic.error_message
+    assert "sign=[REDACTED]" in diagnostic.error_message
+
+
+def test_vk_client_diagnostics_reject_unknown_event(client):
+    from app.web.dependencies import validate_init_data
+
+    client.app.dependency_overrides[validate_init_data] = lambda: {
+        "platform": "vk", "vk_user_id": "5305539",
+    }
+    response = client.post("/api/client-diagnostics/vk", json={
+        "event": "arbitrary.log",
+        "attempt_id": "attempt-12345678",
+    })
+    assert response.status_code == 422
 
 
 # ═══════════════════════════════════════════════════════════════
