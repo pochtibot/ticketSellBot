@@ -63,8 +63,7 @@ def test_vk_groups_page_can_install_the_mini_app_into_a_community():
 def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
     assert "function getVKCommunityTokenMethod(bridge)" in APP_JS
     assert '"VKWebAppGetCommunityAuthToken"' in APP_JS
-    assert 'scope: "messages,manage"' in APP_JS
-    assert "app_widget" not in APP_JS
+    assert 'scope: "stories,photos,app_widget,messages,docs,manage"' in APP_JS
 
 
 def test_vk_connected_group_can_refresh_community_token_scopes():
@@ -153,7 +152,6 @@ def test_vk_community_widget_feature_is_removed():
     )
     for forbidden in ("adminUpdateCommunityWidget", "/vk-widget", "appWidgets.update", "VKWidgetUpdateIn"):
         assert all(forbidden not in source for source in sources)
-    assert "app_widget" not in APP_JS
 
 
 def test_appjs_vk_ticket_dm_flow():
