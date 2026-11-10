@@ -1919,9 +1919,6 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Подключите сообщество с ключом сообщений")
 
         target_id = f"{group.group_id}:{current.telegram_user_id}"
-        existing = await event_svc.get_publication(uid, PlatformType.vk, "vk_organizer_dm", target_id)
-        if existing is not None and existing.status == "posted":
-            return {"sent": False, "already_sent": True, "group_id": group.group_id}
 
         price = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
         date_text = event.date.strftime("%d.%m.%Y %H:%M")
@@ -1952,7 +1949,7 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
             )
             await session.commit()
 
-    return {"sent": sent, "already_sent": False, "group_id": group.group_id}
+    return {"sent": sent, "group_id": group.group_id}
 
 
 @router.get("/admin/events/{event_id}/publications")

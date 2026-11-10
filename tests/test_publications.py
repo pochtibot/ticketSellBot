@@ -133,14 +133,16 @@ class TestPublishWeb:
             test_app.dependency_overrides.clear()
 
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {"sent": True, "already_sent": False, "group_id": group.group_id}
+        assert resp.json() == {"sent": True, "group_id": group.group_id}
         assert send_dm.await_args.args[0] == "5305539"
         assert "Событие для публикации" in send_dm.await_args.args[1]
         publications = await EventService(db_session).list_publications(event.id)
         assert len(publications) == 1
         assert publications[0].target_type == "vk_organizer_dm"
 
-    async def test_vk_organizer_announcement_is_not_sent_twice(self, db_client, db_session, owner_event_vk_group):
+    async def test_vk_organizer_announcement_sends_again_on_each_request(
+        self, db_client, db_session, owner_event_vk_group
+    ):
         owner, event, group = owner_event_vk_group
         from app.web.dependencies import CurrentUser, get_current_user
         test_app = db_client._transport.app
@@ -160,16 +162,28 @@ class TestPublishWeb:
         )
         await db_session.commit()
 
-        with patch("app.web.routes.send_vk_organizer_announcement_dm", new_callable=AsyncMock) as send_dm:
-            resp = await db_client.post(
-                f"/api/admin/events/{event.id}/send-vk-announcement",
-                headers={"X-Skip-Auth": "1"},
-            )
+        with patch(
+            "app.web.routes.send_vk_organizer_announcement_dm",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as send_dm:
+            responses = [
+                await db_client.post(
+                    f"/api/admin/events/{event.id}/send-vk-announcement",
+                    headers={"X-Skip-Auth": "1"},
+                )
+                for _ in range(2)
+            ]
         test_app.dependency_overrides.clear()
 
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["already_sent"] is True
-        send_dm.assert_not_awaited()
+        assert all(resp.status_code == 200 for resp in responses)
+        assert all(
+            resp.json() == {"sent": True, "group_id": group.group_id}
+            for resp in responses
+        )
+        assert send_dm.await_count == 2
+        publications = await EventService(db_session).list_publications(event.id)
+        assert len(publications) == 1
 
     async def test_remove_publication(self, db_client, db_session, owner_event_vk_group):
         owner, event, _group = owner_event_vk_group
