@@ -266,11 +266,6 @@ class PublishIn(BaseModel):
     channel_id: Optional[UUID] = None
 
 
-class VKWidgetUpdateIn(BaseModel):
-    """Обновить карточку мероприятия в виджете сообщества."""
-    vk_group_id: str
-
-
 # ─── Payment ─────────────────────────────────────────────────────────────────
 
 class PaymentOut(BaseModel):

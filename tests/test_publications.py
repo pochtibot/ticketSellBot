@@ -1,23 +1,13 @@
-"""
-Публикации события в цели — event_publications (#164).
-
-VK-анонс публикуется фотоисторией сообщества с community token.
-"""
+"""Event placement records and VK Mini App publishing behavior."""
 
 from datetime import datetime, timezone, timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 
-from app.core.models import EventPoster, PlatformType, SubscriptionTier
+from app.core.models import PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, VKGroupService
-from app.web.vk_api import (
-    update_community_event_widget,
-)
-
 TEST_KEY = Fernet.generate_key().decode()
 
 
@@ -40,7 +30,6 @@ async def owner_event_vk_group(db_session):
         owner_user_id=owner.id,
     )
     event.is_published = True
-    db_session.add(EventPoster(event_id=event.id, image_data=b"poster-bytes", content_type="image/jpeg"))
     await db_session.flush()
 
     with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):
@@ -87,64 +76,7 @@ async def test_remove_publication(db_session, owner_event_vk_group):
     assert await event_svc.list_publications(event.id) == []
 
 
-# ─── VK API клиент ───────────────────────────────────────────────
-
-
-class TestVKAPI:
-    async def test_update_community_event_widget_uses_group_token_and_text_widget(self):
-        group = SimpleNamespace(
-            group_id="12345678",
-            community_token=Fernet(TEST_KEY).encrypt(b"vk-secret-token").decode(),
-        )
-        event = SimpleNamespace(
-            title="Событие для виджета",
-            date=datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc),
-            location="Москва",
-            price=0,
-        )
-        with (
-            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock) as call,
-        ):
-            await update_community_event_widget(group, event)
-        assert call.await_args.args == ("appWidgets.update", "vk-secret-token")
-        assert call.await_args.kwargs["type"] == "text"
-        code = call.await_args.kwargs["code"]
-        assert code.startswith("return {")
-        assert "Событие для виджета" in code
-        assert "Москва" in code
-
-# ─── Web API ─────────────────────────────────────────────────────
-
-
 class TestPublishWeb:
-    async def test_update_vk_event_widget_uses_connected_community(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-        from app.web.dependencies import CurrentUser, get_current_user
-        test_app = db_client._transport.app
-        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-            user_id=owner.id,
-            telegram_user_id="55",
-            name="Organizer",
-            is_super_admin=False,
-            platform=PlatformType.vk,
-        )
-        with patch("app.web.routes.update_community_event_widget", new_callable=AsyncMock) as update:
-            resp = await db_client.post(
-                f"/api/admin/events/{event.id}/vk-widget",
-                headers={"X-Skip-Auth": "1"},
-                json={"vk_group_id": group.group_id},
-            )
-        test_app.dependency_overrides.clear()
-        assert resp.status_code == 200
-        assert resp.json()["updated"] is True
-        update.assert_awaited_once_with(group, event)
-        publications = await EventService(db_session).list_publications(event.id)
-        assert [(publication.target_type, publication.status) for publication in publications] == [
-            ("vk_group_widget", "posted"),
-        ]
-
     async def test_vk_publish_only_makes_event_available_in_ticketbot(self, db_client, db_session, owner_event_vk_group):
         owner, event, _group = owner_event_vk_group
         event.is_published = False

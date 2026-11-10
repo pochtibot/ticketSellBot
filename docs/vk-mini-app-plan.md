@@ -71,8 +71,7 @@ user_identities(
 
 **Текущее состояние (2026-11-10):** автоматическая отправка анонсов из VK Mini App
 удалена. Публикация мероприятия делает его доступным в Билетере; она не размещает
-пост в профиле, на стене сообщества или в историях. Обновление карточки виджета
-сообщества остаётся отдельной функцией.
+пост в профиле, на стене сообщества, в историях или в виджете сообщества.
 
 ### Проблема
 Сейчас `Event.channel_id` → анонс в один TG-канал (`announce.py`). Нужно «одно событие опубликовано в N целей».
@@ -82,7 +81,7 @@ user_identities(
 event_publications(
     id, event_id FK,
     platform,          -- telegram | vk
-    target_type,       -- telegram_channel | vk_group_widget
+    target_type,       -- telegram_channel
     target_id,         -- tg channel id | vk group id | vk user id
     created_by, created_at, status, last_error
 )
@@ -100,7 +99,7 @@ vk_groups(
 )
 ```
 - Подписка-изоляция VK-группе **не нужна**: организатор платит подписку на себя (`User.subscription_*`), группа — только цель рассылки. Это следствие новой концепции.
-- Community token Mini App получает через `VKWebAppGetCommunityToken` → отправляет на бэкенд → хранится зашифрованным. Сейчас он нужен для функций сообщества, например обновления виджета и отправки билета в ЛС; публикационные вызовы VK удалены.
+- Community token Mini App получает через `VKWebAppGetCommunityToken` → отправляет на бэкенд → хранится зашифрованным. Сейчас он используется для отправки билета покупателю в ЛС сообщества; запрос прав ограничен `messages,manage`.
 
 **`[DECISION]`** Хранение community token: зашифрованный столбец + секрет в env. Точный API-контур и scope — проверить при внедрении (см. Нерешённые вопросы, №1).
 
@@ -181,7 +180,7 @@ event_managers(event_id FK, user_id FK)  -- PK (event_id, user_id)
 | 5 | DM-уведомления покупателю в VK (требует `VKWebAppAllowMessagesFromGroup`) | 📌 отложить |
 | 6 | VK Pay для платных билетов | ✅ код заказов/подписанного pay-to-service/callback реализован; выключен до merchant onboarding и sandbox-проверки. Возвраты оплаченных VK-билетов требуют отдельного provider refund flow. Инструкция: `docs/vk-pay-setup.md` |
 | 7 | VK-бот (vkbottle, базовые пользовательские команды `/buy` и т.д.) | 📌 Реализация остаётся в `app/platforms/vk/bot.py`; решение о дальнейшем продукте/развёртывании отдельно от текущего кода Mini App |
-| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения community token | ✅ подключён при добавлении сообщества; запрос прав сообщества включает `stories,messages,manage,photos,app_widget,docs` |
+| 8 | `VKWebAppGetCommunityToken` — фронтенд-вызов для получения community token | ✅ подключён при добавлении сообщества; текущие права: `messages,manage` |
 
 ## 10. Публикация VK Mini App (чек-лист, 2026-08-22)
 

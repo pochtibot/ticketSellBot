@@ -175,7 +175,7 @@ class LinkCode(Base):
 
 
 class VKGroup(Base):
-    """VK community connected for organizer tools, widgets, and ticket messages.
+    """VK community connected for organizer tools and ticket messages.
 
     The encrypted community token is stored in app/core/crypto.py. The organizer,
     rather than the community, owns the subscription.
@@ -203,7 +203,7 @@ class VKGroup(Base):
 
 
 class EventPublication(Base):
-    """External event placement record, such as a Telegram channel or VK widget."""
+    """External Telegram event placement record."""
 
     __tablename__ = "event_publications"
 

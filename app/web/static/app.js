@@ -1895,18 +1895,14 @@ async function showAdminEventDetail(eventId) {
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
         try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
-        let vkGroups = [];
-        if (isVKMode()) {
-            try { vkGroups = await api("/api/me/vk-groups"); } catch (e) { /* группы могут быть недоступны */ }
-        }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges, vkGroups);
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges, vkGroups = []) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
@@ -2027,18 +2023,14 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Сообщество для виджета' : 'Канал для публикации'}</label>
-                <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
-                    ${isVKMode()
-                        ? `<option value="">${vkGroups.length ? 'Выберите сообщество' : 'Нет подключённых сообществ'}</option>` + vkGroups.map(g =>
-                            `<option value="${escapeHtml(g.group_id)}" ${g.has_token ? '' : 'disabled'}>${escapeHtml(g.title || g.group_id)}${g.has_token ? '' : ' — нет токена'}</option>`
-                        ).join('')
-                        : '<option value="">Без канала (DM)</option>' + (state.me?.channels || []).map(c =>
+                ${!isVKMode() ? `
+                    <label class="form-label" for="publish_channel_${event.id}" style="margin:0">Канал для публикации</label>
+                    <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
+                        <option value="">Без канала (DM)</option>${(state.me?.channels || []).map(c =>
                             `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
                         ).join('')}
-                </select>
+                    </select>` : ''}
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">${isVKMode() ? '🌐 Опубликовать в Билетере' : '📢 Опубликовать'}</button>
-                ${isVKMode() ? `<button class="btn btn-sm btn-secondary" onclick="adminUpdateCommunityWidget('${event.id}')">🧩 Обновить виджет</button>` : ''}
             </div>
             ${isVKMode() ? '<span class="hint">Мероприятие станет доступно в приложении. Публикация записей в VK временно отключена.</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
@@ -2260,34 +2252,6 @@ async function adminPublish(eventId) {
         showToast(e.message || "Ошибка", true);
     }
     await showAdminEventDetail(eventId);
-}
-
-async function adminUpdateCommunityWidget(eventId) {
-    const groupSelect = document.getElementById(`publish_channel_${eventId}`);
-    const groupId = groupSelect && groupSelect.value;
-    if (!groupId) {
-        showToast("Выберите сообщество", true);
-        return;
-    }
-    const confirmed = await openAppDialog({
-        mode: "confirm",
-        title: "Обновить виджет?",
-        message: "Обновление заменит содержимое виджета приложения Билетер в выбранном сообществе.",
-        primaryText: "Обновить",
-    });
-    if (!confirmed) {
-        return;
-    }
-    try {
-        await api(`/api/admin/events/${eventId}/vk-widget`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ vk_group_id: groupId }),
-        });
-        showToast("✅ Виджет мероприятия обновлён в сообществе");
-    } catch (e) {
-        showToast(e.message || "Не удалось обновить виджет", true);
-    }
 }
 
 async function adminRepost(eventId) {
@@ -2918,7 +2882,7 @@ async function installVKAppToCommunity() {
         }
         const community = (state.vkAdminGroups || []).find(group => Number(group.id || group.group_id) === groupId);
         const title = community?.name || `сообщество ${groupId}`;
-        showToast(`✅ Билетёр установлен в ${title}. Подключите сообщество в кабинете, чтобы управлять его виджетом и сообщениями о билетах.`);
+        showToast(`✅ Билетёр установлен в ${title}. Подключите сообщество в кабинете для функций организатора.`);
     } catch (e) {
         showToast(e.message || "Не удалось установить приложение в сообщество", true);
     } finally {
@@ -2945,9 +2909,7 @@ async function connectMyVKGroup(groupId) {
             const tokenResult = await vkBridgeRequest(tokenMethod, {
                 app_id: Number(state.vkAppId),
                 group_id: id,
-                // Request every scope supported for community tokens. VK does
-                // not expose `wall` as a community-token scope.
-                scope: "stories,photos,app_widget,messages,docs,manage",
+                scope: "messages,manage",
             });
             communityToken = (tokenResult && tokenResult.access_token) || "";
             if (!communityToken) tokenError = "Не удалось получить ключ сообщества.";

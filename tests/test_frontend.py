@@ -63,8 +63,8 @@ def test_vk_groups_page_can_install_the_mini_app_into_a_community():
 def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
     assert "function getVKCommunityTokenMethod(bridge)" in APP_JS
     assert '"VKWebAppGetCommunityAuthToken"' in APP_JS
-    assert 'scope: "stories,photos,app_widget,messages,docs,manage"' in APP_JS
-    assert 'scope: "wall,stories,photos,app_widget,messages,docs,manage"' not in APP_JS
+    assert 'scope: "messages,manage"' in APP_JS
+    assert "app_widget" not in APP_JS
 
 
 def test_vk_connected_group_can_refresh_community_token_scopes():
@@ -143,17 +143,17 @@ def test_vk_wall_story_and_personal_publication_paths_are_removed():
     assert "Опубликовать в Билетере" in APP_JS
 
 
-def test_vk_event_widget_updates_selected_community_through_server():
-    assert "adminUpdateCommunityWidget('${event.id}')" in APP_JS
-    widget_fn = APP_JS.split("async function adminUpdateCommunityWidget(eventId)", 1)[1].split(
-        "async function adminRepost", 1
-    )[0]
-    assert 'api(`/api/admin/events/${eventId}/vk-widget`' in widget_fn
-    assert 'mode: "confirm"' in widget_fn
-    assert "openAppDialog" in widget_fn
-    assert "VKWebAppShowCommunityWidgetPreviewBox" not in widget_fn
-    assert '"/admin/events/{event_id}/vk-widget"' in ROUTES
-    assert '"appWidgets.update"' in (Path(__file__).resolve().parent.parent / "app" / "web" / "vk_api.py").read_text(encoding="utf-8")
+def test_vk_community_widget_feature_is_removed():
+    root = Path(__file__).resolve().parent.parent
+    sources = (
+        APP_JS,
+        ROUTES,
+        (root / "app" / "web" / "vk_api.py").read_text(encoding="utf-8"),
+        (root / "app" / "core" / "schemas.py").read_text(encoding="utf-8"),
+    )
+    for forbidden in ("adminUpdateCommunityWidget", "/vk-widget", "appWidgets.update", "VKWidgetUpdateIn"):
+        assert all(forbidden not in source for source in sources)
+    assert "app_widget" not in APP_JS
 
 
 def test_appjs_vk_ticket_dm_flow():
