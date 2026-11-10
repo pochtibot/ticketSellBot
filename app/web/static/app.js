@@ -2925,7 +2925,7 @@ async function connectMyVKGroup(groupId) {
             const tokenResult = await vkBridgeRequest(tokenMethod, {
                 app_id: Number(state.vkAppId),
                 group_id: id,
-                scope: "messages,manage",
+                scope: "stories,photos,app_widget,messages,docs,manage",
             });
             communityToken = (tokenResult && tokenResult.access_token) || "";
             if (!communityToken) tokenError = "Не удалось получить ключ сообщества.";
