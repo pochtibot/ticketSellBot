@@ -511,7 +511,7 @@ class TestAPIEndpoints:
                 headers={"X-VK-Init-Data": vk_header},
             )
         assert resp.status_code == 409
-        assert "VK Pay" in resp.json()["detail"]
+        assert "платных билетов" in resp.json()["detail"].lower()
 
     def test_list_tickets_vk_platform(self, client):
         """VK-пользователь видит свои билеты (platform=vk)."""

@@ -428,7 +428,7 @@ function showNoInitData() {
     const content = isVKMode()
         ? `
             <h3>Не удалось открыть приложение</h3>
-            <p>Не удалось получить данные запуска. Закройте приложение и откройте его снова внутри VK.</p>
+            <p>Не удалось открыть приложение. Закройте его и запустите снова.</p>
           `
         : `
             <h3>Откройте кабинет в Telegram</h3>
@@ -497,8 +497,8 @@ function renderTerms() {
             const text = type === "user_agreement"
                 ? "Пользовательское соглашение: использование сервиса «Билетёр» означает согласие с условиями предоставления услуг, правилами покупки и возврата билетов, обязанностями организаторов и ответственностью сторон. Организатор самостоятельно определяет и несёт ответственность за возрастное ограничение мероприятия (0+, 6+, 12+, 16+, 18+), корректность этой маркировки и допуск лиц до 18 лет на 18+ мероприятия (ФЗ-436)."
                 : (isVKMode()
-                    ? "Политика конфиденциальности: сервис обрабатывает идентификатор пользователя, имя и данные билетов для продажи билетов и работы функций организатора. Данные, необходимые для публикации в сообществах VK, хранятся в защищённом виде. Вы можете удалить аккаунт в любое время."
-                    : "Политика конфиденциальности: сервис обрабатывает данные (идентификатор VK/Telegram, имя, билеты) для продажи билетов и работы функций организатора. Токены доступа VK-групп хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.");
+                    ? "Политика конфиденциальности: сервис обрабатывает идентификатор пользователя, имя и данные билетов для продажи билетов и работы функций организатора. Данные, необходимые для публикации в сообществах, хранятся в защищённом виде. Вы можете удалить аккаунт в любое время."
+                    : "Политика конфиденциальности: сервис обрабатывает идентификаторы подключённых аккаунтов, имя и данные билетов для продажи билетов и работы функций организатора. Ключи доступа сообществ хранятся в зашифрованном виде. Вы можете удалить аккаунт в любое время.");
             await tgAlert(text);
         };
         link.removeAttribute("href");
@@ -524,7 +524,7 @@ function renderSupport() {
             <div class="support-block">
                 <h3 style="margin:20px 0 8px">🛟 Поддержка</h3>
                 <p class="hint" style="margin:0 0 8px">Вопросы, замечания, помощь с покупкой билетов:</p>
-                <a class="btn btn-secondary" href="https://vk.ru/club241015257" target="_blank" rel="noopener">💬 Сообщество VK</a>
+                <a class="btn btn-secondary" href="https://vk.ru/club241015257" target="_blank" rel="noopener">💬 Сообщество Билетёра</a>
             </div>`;
     }
     return `
@@ -540,7 +540,7 @@ function renderOrganizerSections(me, channels) {
     if (isVKMode()) {
         return {
             extra: `
-                <h3 style="margin:20px 0 10px">Мои VK-группы</h3>
+                <h3 style="margin:20px 0 10px">Мои сообщества</h3>
                 <p class="hint">Управление группами доступно в приложении.</p>
                 ${me.subscription_tier !== "pro" && vkPayProductEnabled("subscription_pro") ? `
                     <div class="profile-card" style="margin-top:12px">
@@ -550,7 +550,7 @@ function renderOrganizerSections(me, channels) {
                     </div>` : ''}`,
             actions: `
                 <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
-                <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>`
+                <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 Мои сообщества</button>`
         };
     }
     return {
@@ -570,8 +570,8 @@ function renderOrganizerSections(me, channels) {
         actions: `
             <button class="btn btn-secondary" onclick="showMyTickets()">🎫 Мои билеты</button>
             <button class="btn btn-secondary" onclick="showMyChannels()">📢 Мои каналы</button>
-            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 VK-группы</button>
-            <button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Привязать VK (получить код)</button>`
+            <button class="btn btn-secondary" onclick="showMyVKGroups()">📢 Мои сообщества</button>
+            <button class="btn btn-secondary" onclick="createVKLinkCode()">🔗 Связать аккаунты</button>`
     };
 }
 
@@ -704,7 +704,7 @@ function renderHomeDashboard() {
         shortcuts.push({ icon: "🎫", value: "События", label: "Управление", onclick: "showAdminEvents()" });
         shortcuts.push({ icon: "🔍", value: "Билеты", label: "Проверка на входе", onclick: "showCheckin()" });
         if (isVKMode()) {
-            shortcuts.push({ icon: "📢", value: (me.vk_group_ids || []).length, label: "VK-группы", onclick: "showMyVKGroups()" });
+            shortcuts.push({ icon: "📢", value: (me.vk_group_ids || []).length, label: "Сообщества", onclick: "showMyVKGroups()" });
         } else {
             shortcuts.push({ icon: "📢", value: channels.length, label: "Мои площадки", onclick: "showMyChannels()" });
         }
@@ -1090,7 +1090,7 @@ function renderEvent(event) {
     } else if (!event.is_active) {
         buyButton = '<button class="btn btn-disabled" disabled>🔴 Мероприятие отменено</button>';
     } else if (isVKMode() && Number(event.price) > 0 && !vkPayProductEnabled("ticket")) {
-        buyButton = '<p class="hint">Продажа билетов через VK Pay пока недоступна</p>';
+        buyButton = '<p class="hint">Оплата билетов сейчас недоступна</p>';
     } else {
         buyButton = `<button class="btn btn-primary btn-lg" onclick="showConfirm('${event.id}')">🎟 Купить билет — ${formatPrice(event.price)}</button>`;
     }
@@ -1161,7 +1161,7 @@ function showConfirm(eventId) {
 
 async function confirmBuy(eventId) {
     if (isVKMode() && Number(state.currentEvent && state.currentEvent.price) > 0 && !vkPayProductEnabled("ticket")) {
-        showError("Продажа билетов через VK Pay пока недоступна");
+        showError("Оплата билетов сейчас недоступна");
         return;
     }
     const btn = document.getElementById("confirmBtn");
@@ -1210,7 +1210,7 @@ async function startVKPayPurchase(eventId, promo) {
         });
         const bridge = window.vkBridge;
         if (!bridge || typeof bridge.send !== "function") {
-            throw new Error("Оплата VK Pay доступна только внутри приложения ВКонтакте");
+            throw new Error("Для оплаты откройте приложение и повторите попытку.");
         }
 
         if (btn) btn.textContent = "⏳ Ожидаем оплату...";
@@ -1243,10 +1243,10 @@ async function startVKPayPurchase(eventId, promo) {
         if (btn) { btn.disabled = false; btn.textContent = "Проверить оплату ещё раз"; }
         showToast(reservationExpired
             ? "Срок резервации истёк. Если оплата была завершена, проверьте раздел «Билеты» позже; при отсутствии билета обратитесь в поддержку."
-            : "Платёж обрабатывается. Билет появится в разделе «Билеты» после подтверждения VK Pay.");
+            : "Платёж обрабатывается. Билет появится в разделе «Билеты» после подтверждения оплаты.");
     } catch (err) {
         if (btn) { btn.disabled = false; btn.textContent = "✅ Подтвердить покупку"; }
-        showError(err.message || "Не удалось выполнить оплату VK Pay");
+        showError(err.message || "Не удалось выполнить оплату");
     }
 }
 
@@ -1255,12 +1255,12 @@ async function startVKPayProductPurchase(product, onComplete) {
         ? "event_premium"
         : `subscription_${product.tier}`;
     if (!vkPayProductEnabled(availabilityKey)) {
-        showError("Оплата VK Pay для этой функции пока недоступна");
+        showError("Оплата этой функции пока недоступна");
         return;
     }
     const bridge = window.vkBridge;
     if (!bridge || typeof bridge.send !== "function") {
-        showError("Оплата VK Pay доступна только внутри приложения ВКонтакте");
+        showError("Для оплаты откройте приложение и повторите попытку.");
         return;
     }
     const btn = document.activeElement;
@@ -1271,7 +1271,7 @@ async function startVKPayProductPurchase(product, onComplete) {
             body: JSON.stringify(product),
         });
         const accepted = await tgConfirm(
-            `Оплатить ${formatPrice(order.amount)} через VK Pay?`,
+            `Оплатить ${formatPrice(order.amount)}?`,
             "Перейти к оплате",
             "Отмена",
         );
@@ -1299,9 +1299,9 @@ async function startVKPayProductPurchase(product, onComplete) {
             }
             await new Promise(resolve => setTimeout(resolve, 1500));
         }
-        showToast("Платёж обрабатывается. Функция включится после подтверждения VK Pay.");
+        showToast("Платёж обрабатывается. Функция включится после подтверждения оплаты.");
     } catch (err) {
-        showError(err.message || "Не удалось выполнить оплату VK Pay");
+        showError(err.message || "Не удалось выполнить оплату");
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -1318,7 +1318,7 @@ async function offerVkTicketDm(eventId, result) {
         if (!bridge || !vkGroupId) return;
 
         const want = await tgConfirm(
-            "Получить билет в личные сообщения ВКонтакте?\n\n" +
+            "Отправить билет в личные сообщения сообщества?\n\n" +
             "Если откажетесь — билет всегда будет доступен в разделе «Мои билеты».",
             "Да, отправить",
             "Нет, смотреть в приложении",
@@ -1337,7 +1337,7 @@ async function offerVkTicketDm(eventId, result) {
         try {
             const res = await api(`/api/tickets/${result.ticket_id}/send-vk`, { method: "POST" });
             if (res.sent) {
-                tgAlert("🎫 Билет отправлен в личные сообщения ВКонтакте!");
+                tgAlert("🎫 Билет отправлен в личные сообщения сообщества.");
             } else {
                 showToast("Билет сохранён в «Моих билетах»", false);
             }
@@ -1733,7 +1733,7 @@ async function showAdminEventForm(eventId) {
             ${!event && isVKMode() ? `
             <div class="form-field">
                 <label class="form-label">Публикация</label>
-                <div class="hint">Мероприятие создастся в вашем кабинете. После сохранения выберите VK-группу в разделе «Действия», чтобы опубликовать его.</div>
+                <div class="hint">Мероприятие создастся в вашем кабинете. После сохранения выберите сообщество в разделе «Действия», чтобы опубликовать его.</div>
             </div>` : ''}
             ${!event && !isVKMode() ? `
             <div class="form-field">
@@ -2029,10 +2029,10 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
         <h3 style="margin:16px 0 8px">Действия</h3>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Сообщество для публикации VK' : 'Канал для публикации'}</label>
+                <label class="form-label" for="publish_channel_${event.id}" style="margin:0">${isVKMode() ? 'Сообщество для публикации' : 'Канал для публикации'}</label>
                 <select class="form-input" id="publish_channel_${event.id}" style="width:auto;min-width:180px">
                     ${isVKMode()
-                        ? `<option value="">${vkGroups.length ? 'Выберите группу' : 'Нет подключённых VK-групп'}</option>` + vkGroups.map(g =>
+                        ? `<option value="">${vkGroups.length ? 'Выберите сообщество' : 'Нет подключённых сообществ'}</option>` + vkGroups.map(g =>
                             `<option value="${escapeHtml(g.group_id)}" ${g.has_token ? '' : 'disabled'}>${escapeHtml(g.title || g.group_id)}${g.has_token ? '' : ' — нет токена'}</option>`
                         ).join('')
                         : '<option value="">Без канала (DM)</option>' + (state.me?.channels || []).map(c =>
@@ -2045,14 +2045,14 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                     ? `<button class="btn btn-sm btn-secondary" onclick="adminPublishToPersonalWall('${event.id}')">👤 На личную страницу</button>`
                     : ''}
             </div>
-            ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Для публикации анонса VK сначала добавьте афишу мероприятия</span>' : ''}
+            ${isVKMode() && !(event.has_media || event.media_file_id) ? '<span class="hint">Перед публикацией анонса добавьте афишу мероприятия</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
             ${!event.is_premium
                 ? (vkPayProductEnabled("event_premium")
                     ? `<button class="btn btn-sm btn-primary" onclick="purchaseEventPremium('${event.id}')">💎 Премиум за событие</button>`
-                    : (isVKMode() ? '<span class="hint">Премиум мероприятия через VK Pay пока недоступен</span>' : ''))
+                    : (isVKMode() ? '<span class="hint">Покупка премиума сейчас недоступна</span>' : ''))
                 : '<span class="badge badge-tier-pro">💎 Премиум</span>'}
         </div>
         <button class="btn btn-secondary" onclick="showAdminEvents()">← К списку</button>
@@ -2247,7 +2247,7 @@ async function adminPublish(eventId) {
     const channelSelect = document.getElementById(`publish_channel_${eventId}`);
     const channelId = channelSelect ? channelSelect.value : "";
     if (isVKMode() && !channelId) {
-        showToast("Подключите VK-группу и выберите её для публикации", true);
+        showToast("Подключите сообщество и выберите его для публикации", true);
         return;
     }
     const diagnosticAttemptId = isVKMode()
@@ -2290,7 +2290,7 @@ async function adminPublish(eventId) {
             if (types.includes("story")) {
                 showToast("✅ Афиша опубликована в истории сообщества от имени группы");
             } else {
-                showToast(`⚠️ Не удалось опубликовать афишу от имени группы: ${res.publication_error || "VK не разрешил публикацию истории"}`, true);
+                showToast(`⚠️ Не удалось опубликовать афишу от имени сообщества: ${res.publication_error || "Площадка не разрешила публикацию истории"}`, true);
             }
         } else {
             showToast(res.announced
@@ -2315,7 +2315,7 @@ async function adminUpdateCommunityWidget(eventId) {
     const groupSelect = document.getElementById(`publish_channel_${eventId}`);
     const groupId = groupSelect && groupSelect.value;
     if (!groupId) {
-        showToast("Выберите VK-сообщество", true);
+        showToast("Выберите сообщество", true);
         return;
     }
     const confirmed = await openAppDialog({
@@ -2333,16 +2333,16 @@ async function adminUpdateCommunityWidget(eventId) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ vk_group_id: groupId }),
         });
-        showToast("✅ Виджет мероприятия обновлён в VK");
+        showToast("✅ Виджет мероприятия обновлён в сообществе");
     } catch (e) {
-        showToast(e.message || "VK не обновил виджет", true);
+        showToast(e.message || "Не удалось обновить виджет", true);
     }
 }
 
 async function adminPublishToPersonalWall(eventId) {
     const userId = Number(state.vkUserId);
     if (!window.vkBridge || !Number.isSafeInteger(userId) || userId <= 0) {
-        showToast("Не удалось определить ID пользователя VK", true);
+        showToast("Не удалось определить ID профиля", true);
         return;
     }
     const attemptId = window.crypto && typeof window.crypto.randomUUID === "function"
@@ -2354,7 +2354,7 @@ async function adminPublishToPersonalWall(eventId) {
             method: "POST",
         });
         if (Number(post && post.owner_id) !== userId) {
-            throw new Error("ID пользователя VK в приложении и на сервере не совпадают");
+        throw new Error("ID профиля в приложении и на сервере не совпадают");
         }
         const result = await publishVKWallPostFromMiniApp(
             eventId, null, post, attemptId, null,
@@ -2367,9 +2367,9 @@ async function adminPublishToPersonalWall(eventId) {
                 body: JSON.stringify({ post_id: result.postId }),
             }),
         );
-        showToast("✅ Запись опубликована на личной странице VK");
+        showToast("✅ Запись опубликована на вашей странице");
     } catch (error) {
-        showToast(formatVKBridgeError(error, "Не удалось опубликовать на личной странице VK"), true);
+        showToast("Не удалось опубликовать запись на вашей странице", true);
     } finally {
         window.__ticketbotVKPublicationAttempt = null;
     }
@@ -2787,7 +2787,7 @@ function renderMyChannels(channels) {
         html += `</div>`;
     }
     container.innerHTML = html + `
-        <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyVKGroups()">📢 VK-группы</button>
+        <button class="btn btn-secondary" style="margin-top:16px" onclick="showMyVKGroups()">📢 Мои сообщества</button>
     `;
 }
 
@@ -2813,7 +2813,7 @@ async function addMyChannel() {
 async function showMyVKGroups() {
     setActiveTab("admin");
     state.lastAction = "showMyVKGroups";
-    updateToolbar("VK-группы", true, false);
+    updateToolbar("Мои сообщества", true, false);
     showPage("my-vk-groups");
     showLoading();
     try {
@@ -2821,7 +2821,7 @@ async function showMyVKGroups() {
         renderMyVKGroups(groups);
     } catch (err) {
         hideLoading();
-        showError(err.message || "Ошибка загрузки VK-групп");
+        showError(err.message || "Ошибка загрузки сообществ");
     }
 }
 
@@ -2830,14 +2830,14 @@ function renderMyVKGroups(groups) {
     const container = document.getElementById("myVKGroupsContent");
     const canLoadVKGroups = state.platform === "vk" && Boolean(window.vkBridge);
     let html = `
-        <h2 style="margin-bottom:16px">Мои VK-группы</h2>
-        <p class="hint" style="margin-bottom:14px">Загрузите сообщества, которыми вы управляете в VK. Подключите нужное сообщество и подтвердите права для публикации анонсов и отправки билетов.</p>
+        <h2 style="margin-bottom:16px">Мои сообщества</h2>
+        <p class="hint" style="margin-bottom:14px">Загрузите сообщества, которыми вы управляете. Подключите нужное сообщество и подтвердите права для публикации анонсов и отправки билетов.</p>
         ${canLoadVKGroups
             ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
-                <button class="btn btn-primary" onclick="addMyVKGroup()">↻ Загрузить мои сообщества VK</button>
-                <button class="btn btn-secondary" onclick="installVKAppToCommunity()">Установить Билетёр в сообщество</button>
+                <button class="btn btn-primary" onclick="addMyVKGroup()">↻ Загрузить мои сообщества</button>
+                <button class="btn btn-secondary" onclick="installVKAppToCommunity()">Установить приложение в сообщество</button>
             </div>`
-            : `<p class="hint" style="margin-bottom:16px">Список сообществ доступен, когда приложение открыто внутри VK.</p>`}
+            : `<p class="hint" style="margin-bottom:16px">Список сообществ доступен, когда приложение открыто в поддерживаемом клиенте.</p>`}
     `;
 
     const linkedById = new Map((groups || []).map(g => [String(g.group_id), g]));
@@ -2875,11 +2875,11 @@ function renderMyVKGroups(groups) {
         }
         html += `</div>`;
     } else if (communities && communities.length === 0) {
-        html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Нет VK-групп</h3>
-            <p>VK не нашёл сообществ, которыми вы управляете</p></div>`;
+        html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Сообщества не найдены</h3>
+            <p>Не удалось загрузить сообщества, которыми вы управляете.</p></div>`;
     } else if (!groups || groups.length === 0) {
         html += `<div class="empty-state"><div class="empty-icon">📢</div><h3>Список ещё не загружен</h3>
-            <p>Нажмите «Загрузить мои сообщества VK», чтобы выбрать группу</p></div>`;
+            <p>Нажмите «Загрузить мои сообщества», чтобы выбрать сообщество</p></div>`;
     }
 
     const notInAdminList = (groups || []).filter(g => !renderedIds.has(String(g.group_id)));
@@ -2912,7 +2912,7 @@ async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
         return await Promise.race([
             window.vkBridge.send(method, params),
             new Promise((_, reject) => {
-                timeoutId = setTimeout(() => reject(new Error("VK не ответил вовремя. Повторите попытку.")), timeoutMs);
+                timeoutId = setTimeout(() => reject(new Error("Не удалось получить ответ от приложения. Повторите попытку.")), timeoutMs);
             }),
         ]);
     } finally {
@@ -3020,7 +3020,7 @@ async function callVKAPIMethodFromMiniApp(method, params, accessToken) {
     });
     if (result && result.error) throw new Error(formatVKBridgeError(result.error, `Ошибка VK API ${method}`));
     if (!result || !Object.prototype.hasOwnProperty.call(result, "response")) {
-        throw new Error(`VK не вернул ответ на ${method}`);
+        throw new Error(`Не получен ответ на запрос ${method}`);
     }
     return result.response;
 }
@@ -3032,28 +3032,28 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
     const numericUserId = Number(state.vkUserId);
     const isPersonalWall = targetOwnerId === null;
     if (!Number.isSafeInteger(appId) || appId <= 0) {
-        throw new Error("Не удалось определить VK-приложение");
+        throw new Error("Не удалось определить приложение");
     }
     if (isPersonalWall && numericGroupId !== null) {
         throw new Error("Для личной стены не нужно указывать сообщество");
     }
     if (isPersonalWall && (!Number.isSafeInteger(numericUserId) || numericUserId <= 0)) {
-        throw new Error("Не удалось определить VK-пользователя");
+        throw new Error("Не удалось определить профиль пользователя");
     }
     if (!isPersonalWall && (!Number.isSafeInteger(numericGroupId) || numericGroupId <= 0)) {
-        throw new Error("Не удалось определить VK-сообщество");
+        throw new Error("Не удалось определить сообщество");
     }
     const wallOwnerId = isPersonalWall ? null
         : (targetOwnerId === undefined ? -numericGroupId : Number(targetOwnerId));
     if (!isPersonalWall && (!Number.isSafeInteger(wallOwnerId) || wallOwnerId === 0)) {
-        throw new Error("Не удалось определить владельца стены VK");
+        throw new Error("Не удалось определить владельца страницы");
     }
 
     // Keep the user token inside VK. A direct personal wall.post requires both
     // photo upload and wall permissions.
     const auth = await withVKDiagnosticStage(attemptId, "auth", "VKWebAppGetAuthToken", async () => {
         const result = await vkBridgeRequest("VKWebAppGetAuthToken", { app_id: appId, scope: "photos,wall" });
-        if (!result || !result.access_token) throw new Error("VK не выдал пользовательский токен");
+        if (!result || !result.access_token) throw new Error("Не удалось получить ключ доступа пользователя");
         return result;
     });
     const token = auth.access_token;
@@ -3080,7 +3080,7 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
                     "photos.getWallUploadServer",
                     isPersonalWall ? {} : { group_id: numericGroupId }, token,
                 );
-                if (!result || !result.upload_url) throw new Error("VK не выдал адрес загрузки афиши");
+                if (!result || !result.upload_url) throw new Error("Не удалось получить адрес загрузки афиши");
                 return result;
             },
         );
@@ -3099,7 +3099,7 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
             }),
         );
         if (!uploaded || uploaded.server == null || !uploaded.photo || !uploaded.hash) {
-            throw new Error("VK вернул неполные данные загруженной афиши");
+            throw new Error("Получены неполные данные загруженной афиши");
         }
 
         const photo = await withVKDiagnosticStage(
@@ -3113,13 +3113,13 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
                     hash: uploaded.hash,
                 }, token);
                 const savedPhoto = Array.isArray(savedPhotos) ? savedPhotos[0] : null;
-                if (!savedPhoto || !savedPhoto.owner_id || !savedPhoto.id) throw new Error("VK не сохранил афишу");
+                if (!savedPhoto || !savedPhoto.owner_id || !savedPhoto.id) throw new Error("Не удалось сохранить афишу");
                 return savedPhoto;
             },
         );
         attachment = `photo${photo.owner_id}_${photo.id}`;
     }
-    if (!attachment) throw new Error("VK не подготовил фотографию для публикации");
+    if (!attachment) throw new Error("Не удалось подготовить фотографию для публикации");
 
     if (isPersonalWall) {
         const response = await withVKDiagnosticStage(
@@ -3135,9 +3135,9 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
             logVKClientDiagnostic("vk.publication.result", attemptId, {
                 stage: "wall_post", status: "missing_post_id",
                 bridge_method: "VKWebAppCallAPIMethod", api_method: "wall.post",
-                error_message: "VK API не вернул ID опубликованной записи",
+                error_message: "API не вернул ID опубликованной записи",
             });
-            throw new Error("VK API не вернул ID опубликованной записи");
+            throw new Error("Не удалось получить ID опубликованной записи");
         }
         logVKClientDiagnostic("vk.publication.result", attemptId, {
             stage: "wall_post", status: "success",
@@ -3162,7 +3162,7 @@ async function publishVKWallPostFromMiniApp(eventId, groupId, post, attemptId, t
             bridge_method: "VKWebAppShowWallPostBox",
             error_message: "VK завершил форму без post_id",
         });
-        throw new Error("VK не вернул ID опубликованной записи");
+        throw new Error("Не удалось получить ID опубликованной записи");
     }
     logVKClientDiagnostic("vk.publication.result", attemptId, {
         stage: "wall_composer", status: "success",
@@ -3188,7 +3188,7 @@ function getVKCommunityTokenMethod(bridge) {
 
 async function addMyVKGroup() {
     if (state.platform !== "vk" || !window.vkBridge) {
-        showToast("Откройте приложение внутри VK, чтобы загрузить сообщества", true);
+        showToast("Откройте приложение в поддерживаемом клиенте, чтобы загрузить сообщества", true);
         return;
     }
 
@@ -3196,7 +3196,7 @@ async function addMyVKGroup() {
     try {
         const appId = Number(state.vkAppId);
         if (!Number.isSafeInteger(appId) || appId <= 0) {
-            throw new Error("Не удалось определить ID VK-приложения. Перезапустите его из VK.");
+            throw new Error("Не удалось определить ID приложения. Перезапустите его.");
         }
         // User token is needed only in the client to list communities. It is
         // never sent to our backend or stored by the app.
@@ -3205,7 +3205,7 @@ async function addMyVKGroup() {
             scope: "groups",
         });
         if (!auth || !auth.access_token) {
-            throw new Error("VK не выдал разрешение на просмотр списка сообществ");
+            throw new Error("Не удалось получить разрешение на просмотр списка сообществ");
         }
 
         const result = await vkBridgeRequest("VKWebAppCallAPIMethod", {
@@ -3221,7 +3221,7 @@ async function addMyVKGroup() {
         const response = result && result.response;
         const items = Array.isArray(response) ? response : (response && response.items);
         if (!Array.isArray(items)) {
-            throw new Error("VK вернул неожиданный ответ при загрузке сообществ");
+            throw new Error("Получен неожиданный ответ при загрузке сообществ");
         }
         state.vkAdminGroups = items.filter(group => group && Number.isSafeInteger(Number(group.id)) && Number(group.id) > 0);
 
@@ -3230,13 +3230,13 @@ async function addMyVKGroup() {
         renderMyVKGroups(linked);
     } catch (e) {
         hideLoading();
-        showToast(e.message || "Не удалось загрузить сообщества VK", true);
+        showToast(e.message || "Не удалось загрузить сообщества", true);
     }
 }
 
 async function installVKAppToCommunity() {
     if (state.platform !== "vk" || !window.vkBridge) {
-        showToast("Откройте приложение внутри VK, чтобы установить его в сообщество", true);
+        showToast("Откройте приложение в поддерживаемом клиенте, чтобы установить его в сообщество", true);
         return;
     }
 
@@ -3245,18 +3245,18 @@ async function installVKAppToCommunity() {
         const method = "VKWebAppAddToCommunity";
         if (typeof window.vkBridge.supportsAsync === "function"
             && !await window.vkBridge.supportsAsync(method)) {
-            throw new Error("Эта версия VK не поддерживает установку приложения в сообщество");
+            throw new Error("В этой версии приложения установка в сообщество недоступна");
         }
         const result = await vkBridgeRequest(method, {}, 60000);
         const groupId = Number(result && result.group_id);
         if (!Number.isSafeInteger(groupId) || groupId <= 0) {
-            throw new Error("VK не подтвердил установку приложения в сообщество");
+            throw new Error("Не удалось подтвердить установку приложения в сообщество");
         }
         const community = (state.vkAdminGroups || []).find(group => Number(group.id || group.group_id) === groupId);
         const title = community?.name || `сообщество ${groupId}`;
         showToast(`✅ Билетёр установлен в ${title}. Если группы нет в выборе публикации, сначала подключите её в кабинете.`);
     } catch (e) {
-        showToast(e.message || "VK не установил приложение в сообщество", true);
+        showToast(e.message || "Не удалось установить приложение в сообщество", true);
     } finally {
         hideLoading();
     }
@@ -3265,7 +3265,7 @@ async function installVKAppToCommunity() {
 async function connectMyVKGroup(groupId) {
     const id = Number(groupId);
     if (state.platform !== "vk" || !window.vkBridge || !Number.isSafeInteger(id) || id <= 0) {
-        showToast("Откройте приложение внутри VK, чтобы подключить сообщество", true);
+        showToast("Откройте приложение в поддерживаемом клиенте, чтобы подключить сообщество", true);
         return;
     }
 
@@ -3277,7 +3277,7 @@ async function connectMyVKGroup(groupId) {
     try {
         try {
             const tokenMethod = getVKCommunityTokenMethod(window.vkBridge);
-            if (!tokenMethod) throw new Error("Эта версия VK не поддерживает выдачу токена сообщества. Обновите VK и повторите попытку.");
+            if (!tokenMethod) throw new Error("В этой версии приложения нельзя получить ключ сообщества. Обновите приложение и повторите попытку.");
             const tokenResult = await vkBridgeRequest(tokenMethod, {
                 app_id: Number(state.vkAppId),
                 group_id: id,
@@ -3286,10 +3286,10 @@ async function connectMyVKGroup(groupId) {
                 scope: "stories,photos,app_widget,messages,docs,manage",
             });
             communityToken = (tokenResult && tokenResult.access_token) || "";
-            if (!communityToken) tokenError = "VK подтвердил запрос, но не вернул токен сообщества.";
+            if (!communityToken) tokenError = "Не удалось получить ключ сообщества.";
         } catch (error) {
             // Keep the group visible and removable even if VK denies the token.
-            tokenError = error?.message || error?.error_data?.error_reason || "VK отказал в выдаче токена сообщества.";
+            tokenError = error?.message || error?.error_data?.error_reason || "Не удалось получить ключ сообщества.";
         }
 
         const registerGroup = token => api("/api/me/vk-groups", {
@@ -3314,7 +3314,7 @@ async function connectMyVKGroup(groupId) {
         hideLoading();
         renderMyVKGroups(linked);
         showToast(communityToken
-            ? "✅ Сообщество VK подключено"
+            ? "✅ Сообщество подключено"
             : `Сообщество добавлено без токена. ${tokenError} Проверьте права администратора и разрешения приложения.`, !communityToken);
     } catch (e) {
         hideLoading();
@@ -3323,10 +3323,10 @@ async function connectMyVKGroup(groupId) {
 }
 
 async function removeMyVKGroup(groupId) {
-    if (!(await tgConfirm(`Удалить VK-группу ${groupId}?`))) return;
+    if (!(await tgConfirm(`Удалить сообщество ${groupId}?`))) return;
     try {
         await api(`/api/me/vk-groups/${encodeURIComponent(groupId)}`, { method: "DELETE" });
-        showToast("✅ VK-группа удалена");
+        showToast("✅ Сообщество удалено");
         await showMyVKGroups();
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
@@ -3340,7 +3340,7 @@ async function createVKLinkCode() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ target_platform: "vk" }),
         });
-        tgAlert(`🔗 Код привязки VK:\n\n<b>${res.code}</b>\n\nДействует ${res.ttl_minutes} мин.\nВведите его в VK Mini App → «Привязать Telegram».`);
+        tgAlert(`🔗 Код привязки аккаунта:\n\n<b>${res.code}</b>\n\nДействует ${res.ttl_minutes} мин.\nВведите его в приложении → «Связать аккаунты».`);
     } catch (e) { showToast(e.message || "Ошибка", true); }
 }
 
@@ -3353,7 +3353,7 @@ async function linkVKByCode() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ code: code.trim() }),
         });
-        showToast("✅ VK привязан к Telegram");
+        showToast("✅ Аккаунты связаны");
         await loadMe();
         await showProfile();
     } catch (e) { showToast(e.message || "Ошибка", true); }
@@ -3546,7 +3546,7 @@ async function adminUserSubscribe(userId) {
 async function becomeOrganizer() {
     if (state.platform === "vk") {
         if (!vkPayProductEnabled("subscription_basic")) {
-            showError("Оплата подписки через VK Pay пока недоступна");
+            showError("Оплата подписки сейчас недоступна");
             return;
         }
         await buyVKOrganizerSubscription("basic");
@@ -3566,7 +3566,7 @@ async function becomeOrganizer() {
 
 async function buyVKOrganizerSubscription(tier) {
     if (!vkPayProductEnabled(`subscription_${tier}`)) {
-        showError("Оплата подписки через VK Pay пока недоступна");
+        showError("Оплата подписки сейчас недоступна");
         return;
     }
     await startVKPayProductPurchase(

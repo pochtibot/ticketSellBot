@@ -128,7 +128,7 @@ def test_vk_monetization_actions_require_server_readiness():
     assert 'vkPayProductEnabled("subscription_basic")' in APP_JS
     assert 'vkPayProductEnabled("subscription_pro")' in APP_JS
     assert 'vkPayProductEnabled("event_premium")' in APP_JS
-    assert "Продажа билетов через VK Pay пока недоступна" in APP_JS
+    assert "Оплата билетов сейчас недоступна" in APP_JS
 
 
 def test_vk_personal_wall_publication_uses_a_user_token_inside_vk_without_sending_it_to_backend():
@@ -215,7 +215,7 @@ def test_appjs_vk_ticket_dm_flow():
     assert "VKWebAppAllowMessagesFromGroup" in APP_JS
     assert "vk_group_id" in APP_JS
     assert "/send-vk" in APP_JS
-    assert "Билет отправлен в личные сообщения ВКонтакте" in APP_JS
+    assert "Билет отправлен в личные сообщения сообщества" in APP_JS
 
 
 def test_appjs_invite_links_flow():
@@ -418,7 +418,7 @@ def test_vk_shell_has_no_external_platform_assets_or_links():
 def test_vk_mode_has_platform_scoped_copy_and_profile():
     """VK-контур должен иметь отдельные platform-safe ветки."""
     assert "isVKMode" in APP_JS
-    assert "внутри VK" in APP_JS
+    assert "в поддерживаемом клиенте" in APP_JS
     assert "ID пользователя" in APP_JS
     assert "https://vk.ru/club241015257" in APP_JS
     assert "createVKLinkCode" in APP_JS
@@ -443,7 +443,7 @@ def test_vk_no_auth_does_not_expose_telegram_copy():
     no_auth_end = APP_JS.index("\n// ═", no_auth_start + 1)
     no_auth_body = APP_JS[no_auth_start:no_auth_end]
     assert "Откройте кабинет в Telegram" in no_auth_body
-    assert "внутри VK" in no_auth_body
+    assert "Не удалось открыть приложение" in no_auth_body
     assert "isVKMode()" in APP_JS
     assert "window.location.href" not in no_auth_body
 

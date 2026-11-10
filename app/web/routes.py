@@ -97,7 +97,7 @@ async def record_vk_client_diagnostic(
 ):
     """Accept privacy-minimized client diagnostics from authenticated VK Mini Apps."""
     if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
 
     error_message = body.error_message
     if error_message:
@@ -437,7 +437,7 @@ async def buy_ticket(
                 if EventService.resolve_price(ranges.get(uid), event, now) > 0:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail="Платные билеты во VK оформляются только через VK Pay",
+                        detail="Оформление платных билетов здесь временно недоступно",
                     )
 
         # Get/create user
@@ -555,9 +555,9 @@ async def create_vk_pay_order(
 ):
     """Create a VK-only signed pay-to-service order; ticket waits for callback."""
     if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VK Pay доступен только во VK Mini App")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Оплата доступна только из приложения")
     if not _vk_pay_is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата VK Pay пока не подключена")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата пока не подключена")
     try:
         uid = UUID(event_id)
     except ValueError:
@@ -611,7 +611,7 @@ async def get_vk_pay_order_status(
     auth_data: dict = Depends(validate_init_data),
 ):
     if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ VK Pay доступен только во VK Mini App")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ доступен только из приложения")
     user_data = auth_data.get("user", {})
     async with async_session_factory() as session:
         user = await UserService(session).get_or_create(
@@ -633,9 +633,9 @@ async def create_vk_pay_product_order(
 ):
     """Create a server-priced VK Pay order for organizer features."""
     if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Оплата доступна только во VK Mini App")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Оплата доступна только из приложения")
     if not _vk_pay_is_configured():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата VK Pay пока не подключена")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Оплата пока не подключена")
 
     if body.product_type == "subscription":
         if body.tier is None or body.event_id is not None:
@@ -652,14 +652,14 @@ async def create_vk_pay_product_order(
         description = "Премиум мероприятия"
     price = _vk_pay_product_price(raw_price)
     if price is None or not price.is_finite() or price < Decimal("1.00"):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Цена продукта VK Pay не настроена")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Цена продукта не настроена")
 
     user_data = auth_data.get("user", {})
     platform_user_id = str(user_data.get("id", "0"))
     try:
         vk_user_id = int(platform_user_id)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID пользователя VK")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID профиля")
 
     async with async_session_factory() as session:
         user = await UserService(session).get_or_create(
@@ -708,7 +708,7 @@ async def get_vk_pay_product_order_status(
     auth_data: dict = Depends(validate_init_data),
 ):
     if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ доступен только во VK Mini App")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Заказ доступен только из приложения")
     user_data = auth_data.get("user", {})
     async with async_session_factory() as session:
         user = await UserService(session).get_or_create(
@@ -1155,7 +1155,7 @@ async def subscribe_me(
     if current.platform is PlatformType.vk:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="В VK Mini App подписка активируется только после оплаты VK Pay",
+            detail="Подписка активируется только после оплаты",
         )
     async with async_session_factory() as session:
         user_svc = UserService(session)
@@ -1186,7 +1186,7 @@ async def purchase_event_premium(
     if current.platform is PlatformType.vk:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="В VK Mini App премиум мероприятия активируется только после оплаты VK Pay",
+            detail="Премиум мероприятия активируется только после оплаты",
         )
     try:
         uid = UUID(event_id)
@@ -1270,7 +1270,7 @@ async def link_me(
     if auth_data.get("platform") != "vk":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Привязка площадки доступна только из VK Mini App",
+            detail="Привязка аккаунта доступна только из приложения",
         )
     vk_user_id = str(auth_data["user"]["id"])
 
@@ -1404,7 +1404,7 @@ async def register_my_vk_group(
     if not group_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Укажите ID VK-группы",
+            detail="Укажите ID сообщества",
         )
     normalized_group_id = group_id.lstrip("-")
     if (
@@ -1415,7 +1415,7 @@ async def register_my_vk_group(
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Укажите числовой ID VK-сообщества",
+            detail="Укажите числовой ID сообщества",
         )
     group_id = normalized_group_id
 
@@ -1859,7 +1859,7 @@ async def admin_publish_event(
     if body.channel_id and body.vk_group_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Укажите одну цель публикации: канал или VK-группу",
+            detail="Укажите одну цель публикации: канал или сообщество",
         )
 
     # ─── VK-сообщество: пост на стене и, если доступно, история ──
@@ -1875,7 +1875,7 @@ async def admin_publish_event(
 
             group = await group_svc.get_by_group_id(body.vk_group_id.strip())
             if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-группа не найдена")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
             if group.owner_user_id != current.user_id and not current.is_super_admin:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этой группе")
 
@@ -1889,7 +1889,7 @@ async def admin_publish_event(
             if poster is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Для публикации анонса в VK сначала добавьте афишу мероприятия",
+                    detail="Перед публикацией анонса добавьте афишу мероприятия",
                 )
             poster_bytes = bytes(poster.image_data)
             await event_svc.update(uid, is_published=True)
@@ -1915,7 +1915,7 @@ async def admin_publish_event(
                     link_text="ticket" if app_link else None,
                 )
                 if not story_ok:
-                    story_error = "VK не подтвердил публикацию истории"
+                    story_error = "Не удалось опубликовать историю сообщества"
             if story_attempted:
                 await event_svc.add_publication(
                     event_id=uid,
@@ -2008,11 +2008,11 @@ async def admin_update_vk_event_widget(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
     if not body.vk_group_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите VK-сообщество")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите сообщество")
 
     group_id = body.vk_group_id.strip().lstrip("-")
     if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID VK-сообщества")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID сообщества")
 
     async with async_session_factory() as session:
         event_svc = EventService(session)
@@ -2025,7 +2025,7 @@ async def admin_update_vk_event_widget(
 
         group = await group_svc.get_by_group_id(group_id)
         if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не подключено")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не подключено")
         if group.owner_user_id != current.user_id and not current.is_super_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
         if not group.community_token:
@@ -2045,7 +2045,7 @@ async def admin_update_vk_event_widget(
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"VK не обновил виджет: {exc}",
+                detail="Не удалось обновить виджет. Проверьте установку приложения и права доступа.",
             ) from exc
 
         await event_svc.add_publication(
@@ -2075,7 +2075,7 @@ async def record_manual_vk_publication(
 ):
     """Record a successful post returned by VKWebAppShowWallPostBox."""
     if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
     try:
         uid = UUID(event_id)
     except ValueError:
@@ -2091,7 +2091,7 @@ async def record_manual_vk_publication(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
         group = await group_svc.get_by_group_id(body.vk_group_id.strip())
         if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
         if group.owner_user_id != current.user_id and not current.is_super_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
         await event_svc.add_publication(
@@ -2113,14 +2113,14 @@ async def get_vk_personal_wall_draft(
 ):
     """Prepare an event announcement for the VK user's personal wall composer."""
     if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
     try:
         uid = UUID(event_id)
         vk_user_id = int(current.telegram_user_id)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или VK-пользователя")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или профиля")
     if vk_user_id <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить VK-пользователя")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить профиль пользователя")
 
     async with async_session_factory() as session:
         event_svc = EventService(session)
@@ -2158,14 +2158,14 @@ async def record_manual_vk_personal_publication(
 ):
     """Record a user-confirmed VK post on the organizer's personal wall."""
     if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
     try:
         uid = UUID(event_id)
         vk_user_id = int(current.telegram_user_id)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или VK-пользователя")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или профиля")
     if vk_user_id <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить VK-пользователя")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить профиль пользователя")
 
     async with async_session_factory() as session:
         event_svc = EventService(session)
@@ -2198,7 +2198,7 @@ async def relay_vk_wall_photo_upload(
     the raw multipart upload is proxied here. The URL is restricted to VK hosts.
     """
     if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из VK")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
     try:
         uid = UUID(event_id)
     except ValueError:
@@ -2223,14 +2223,14 @@ async def relay_vk_wall_photo_upload(
         or parsed_url.username
         or parsed_url.password
     ):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="VK вернул недопустимый адрес загрузки")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Получен недопустимый адрес загрузки")
     if photo_target not in {"group", "user"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная цель загрузки фотографии")
     if photo_target == "group":
         if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное VK-сообщество")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное сообщество")
     elif group_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Для личной стены нельзя передавать VK-сообщество")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Для личной страницы нельзя передавать сообщество")
 
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].lower()
     if content_type not in {"image/jpeg", "image/png", "image/webp"}:
@@ -2261,7 +2261,7 @@ async def relay_vk_wall_photo_upload(
             group_svc = VKGroupService(session)
             group = await group_svc.get_by_group_id(group_id)
             if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VK-сообщество не найдено")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
             if group.owner_user_id != current.user_id and not current.is_super_admin:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
 
@@ -2275,9 +2275,9 @@ async def relay_vk_wall_photo_upload(
             upload_result = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning("VK photo upload relay failed for event %s: %s", uid, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK отклонил загрузку афиши")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Площадка отклонила загрузку афиши")
     if not isinstance(upload_result, dict) or not all(key in upload_result for key in ("server", "photo", "hash")):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK вернул неполный результат загрузки афиши")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Получен неполный результат загрузки афиши")
     return upload_result
 
 
