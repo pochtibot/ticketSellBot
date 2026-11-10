@@ -95,7 +95,7 @@ async def test_vk_pay_disabled_fails_closed(db_client, sample_event, monkeypatch
     )
 
     assert response.status_code == 503
-    assert "VK Pay" in response.json()["detail"]
+    assert response.json()["detail"] == "Оплата пока не подключена"
 
 
 async def test_vk_paid_ticket_cannot_use_legacy_instant_purchase(db_client, sample_event, monkeypatch):
@@ -109,7 +109,7 @@ async def test_vk_paid_ticket_cannot_use_legacy_instant_purchase(db_client, samp
         json={},
     )
     assert response.status_code == 409
-    assert "VK Pay" in response.json()["detail"]
+    assert response.json()["detail"] == "Оформление платных билетов здесь временно недоступно"
 
 
 async def test_vk_only_order_reserves_seat_without_issuing_ticket(
