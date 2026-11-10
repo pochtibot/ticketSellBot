@@ -3,6 +3,7 @@
 Community token хранится зашифрованным и расшифровывается только для API-запроса.
 """
 
+import json
 import logging
 
 import httpx
@@ -90,22 +91,80 @@ async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
         return False
 
 
-async def send_vk_organizer_announcement_dm(vk_user_id: str, text: str, group) -> bool:
-    """Send a published event announcement to its VK organizer's own inbox."""
+async def send_vk_organizer_announcement_dm(
+    vk_user_id: str,
+    text: str,
+    group,
+    *,
+    keyboard: dict | None = None,
+    poster_data: bytes | None = None,
+    poster_content_type: str = "image/jpeg",
+) -> bool:
+    """Send a formatted event announcement with optional poster and link button."""
     token = decrypt_token(group.community_token or "")
     if not token:
         logger.warning("Нет community token для VK-группы %s — DM анонса не отправлен", group.group_id)
         return False
+
+    peer_id = int(vk_user_id)
+    attachment = None
+    if poster_data:
+        try:
+            attachment = await _upload_message_photo(
+                token, peer_id, poster_data, poster_content_type
+            )
+        except (VKAPIError, httpx.HTTPError, KeyError, TypeError, ValueError) as e:
+            logger.warning("Не удалось добавить афишу VK-анонса для группы %s: %s", group.group_id, e)
+            return False
+
+    params = {
+        "peer_id": peer_id,
+        "message": text,
+        "random_id": 0,
+    }
+    if keyboard:
+        params["keyboard"] = json.dumps(keyboard, ensure_ascii=False)
+    if attachment:
+        params["attachment"] = attachment
     try:
-        await vk_api_call(
-            "messages.send",
-            token,
-            peer_id=int(vk_user_id),
-            message=text,
-            random_id=0,
-        )
+        await vk_api_call("messages.send", token, **params)
         logger.info("Анонс отправлен организатору VK %s от группы %s", vk_user_id, group.group_id)
         return True
     except VKAPIError as e:
         logger.error("Ошибка отправки VK-анонса организатору %s: %s", vk_user_id, e)
         return False
+
+
+async def _upload_message_photo(
+    token: str,
+    peer_id: int,
+    image_data: bytes,
+    content_type: str,
+) -> str:
+    """Upload an event poster through VK's documented private-message photo flow."""
+    upload_info = await vk_api_call("photos.getMessagesUploadServer", token, peer_id=peer_id)
+    upload_url = upload_info.get("upload_url")
+    if not upload_url:
+        raise ValueError("VK не вернул адрес загрузки афиши")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            upload_url,
+            files={"photo": ("event-poster.jpg", image_data, content_type)},
+        )
+        response.raise_for_status()
+        uploaded = response.json()
+
+    saved = await vk_api_call(
+        "photos.saveMessagesPhoto",
+        token,
+        server=uploaded["server"],
+        photo=uploaded["photo"],
+        hash=uploaded["hash"],
+    )
+    photo = saved[0] if isinstance(saved, list) and saved else saved
+    owner_id = photo.get("owner_id")
+    photo_id = photo.get("id")
+    if owner_id is None or photo_id is None:
+        raise ValueError("VK не вернул идентификатор загруженной афиши")
+    return f"photo{owner_id}_{photo_id}"

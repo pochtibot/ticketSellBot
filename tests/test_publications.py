@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest_asyncio
 from cryptography.fernet import Fernet
 
-from app.core.models import PlatformType, SubscriptionTier
+from app.core.models import EventPoster, PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, VKGroupService
 TEST_KEY = Fernet.generate_key().decode()
 
@@ -110,8 +110,13 @@ class TestPublishWeb:
         assert event.is_published is True
         assert await EventService(db_session).list_publications(event.id) == []
 
-    async def test_vk_publish_sends_announcement_to_organizer_dm(self, db_client, db_session, owner_event_vk_group):
+    async def test_vk_publish_sends_announcement_to_organizer_dm(
+        self, db_client, db_session, owner_event_vk_group, monkeypatch
+    ):
         owner, event, group = owner_event_vk_group
+        monkeypatch.setattr("app.web.routes.settings.webapp_url", "https://example.test/vk-app")
+        db_session.add(EventPoster(event_id=event.id, image_data=b"poster", content_type="image/jpeg"))
+        await db_session.commit()
         from app.web.dependencies import CurrentUser, get_current_user
         test_app = db_client._transport.app
         test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
@@ -135,7 +140,19 @@ class TestPublishWeb:
         assert resp.status_code == 200, resp.text
         assert resp.json() == {"sent": True, "group_id": group.group_id}
         assert send_dm.await_args.args[0] == "5305539"
-        assert "Событие для публикации" in send_dm.await_args.args[1]
+        message = send_dm.await_args.args[1]
+        assert message.startswith("📣 АНОНС ГОТОВ\n\n🎟 ")
+        assert "📅 " in message
+        assert "📍 " in message
+        assert "💳 " in message
+        assert "Страница мероприятия — по кнопке ниже." in message
+        keyboard = send_dm.await_args.kwargs["keyboard"]
+        assert send_dm.await_args.kwargs["poster_data"] == b"poster"
+        assert send_dm.await_args.kwargs["poster_content_type"] == "image/jpeg"
+        button = keyboard["buttons"][0][0]
+        assert button["action"]["type"] == "open_link"
+        assert button["action"]["label"] == "Открыть мероприятие"
+        assert button["action"]["link"] == f"https://example.test/vk-app?event_id={event.id}"
         publications = await EventService(db_session).list_publications(event.id)
         assert len(publications) == 1
         assert publications[0].target_type == "vk_organizer_dm"

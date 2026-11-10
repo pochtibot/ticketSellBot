@@ -7,6 +7,8 @@ VK-группы как цели публикации (#163): self-service орг
 """
 
 import uuid
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -120,6 +122,124 @@ async def test_send_vk_ticket_dm_api_error(db_session, vk_owner, crypto_key):
     ):
         ok = await send_vk_ticket_dm("5305539", "text", group=group)
     assert ok is False
+
+
+async def test_send_vk_organizer_announcement_includes_keyboard_and_poster():
+    from app.web.vk_api import send_vk_organizer_announcement_dm
+
+    group = SimpleNamespace(group_id="7777777", community_token="encrypted-token")
+    keyboard = {
+        "inline": True,
+        "one_time": False,
+        "buttons": [[{
+            "action": {
+                "type": "open_link",
+                "label": "Открыть мероприятие",
+                "link": "https://example.test/event",
+            },
+            "color": "primary",
+        }]],
+    }
+    with (
+        patch("app.web.vk_api.decrypt_token", return_value="community-token"),
+        patch("app.web.vk_api._upload_message_photo", new_callable=AsyncMock, return_value="photo-1_2"),
+        patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock) as api_call,
+    ):
+        sent = await send_vk_organizer_announcement_dm(
+            "5305539",
+            "📣 АНОНС ГОТОВ",
+            group,
+            keyboard=keyboard,
+            poster_data=b"poster",
+        )
+
+    assert sent is True
+    api_call.assert_awaited_once()
+    assert api_call.await_args.args == ("messages.send", "community-token")
+    assert api_call.await_args.kwargs["peer_id"] == 5305539
+    assert api_call.await_args.kwargs["attachment"] == "photo-1_2"
+    assert json.loads(api_call.await_args.kwargs["keyboard"]) == keyboard
+
+
+async def test_vk_message_poster_uses_documented_upload_flow():
+    from app.web.vk_api import _upload_message_photo
+
+    class UploadResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"server": 12, "photo": "uploaded-photo", "hash": "upload-hash"}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+            self.upload = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, files):
+            self.upload = (url, files)
+            return UploadResponse()
+
+    upload_clients = []
+
+    def make_client(*, timeout):
+        client = FakeClient(timeout)
+        upload_clients.append(client)
+        return client
+
+    with (
+        patch(
+            "app.web.vk_api.vk_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                {"upload_url": "https://upload.example.test"},
+                [{"owner_id": -777, "id": 456}],
+            ],
+        ) as api_call,
+        patch("app.web.vk_api.httpx.AsyncClient", side_effect=make_client),
+    ):
+        attachment = await _upload_message_photo(
+            "community-token", 5305539, b"image-data", "image/jpeg"
+        )
+
+    assert attachment == "photo-777_456"
+    assert api_call.await_args_list[0].args == ("photos.getMessagesUploadServer", "community-token")
+    assert api_call.await_args_list[0].kwargs == {"peer_id": 5305539}
+    assert api_call.await_args_list[1].args == ("photos.saveMessagesPhoto", "community-token")
+    assert api_call.await_args_list[1].kwargs == {
+        "server": 12,
+        "photo": "uploaded-photo",
+        "hash": "upload-hash",
+    }
+    assert upload_clients[0].upload[0] == "https://upload.example.test"
+    assert upload_clients[0].upload[1]["photo"][1:] == (b"image-data", "image/jpeg")
+
+
+async def test_vk_announcement_is_not_sent_without_existing_poster():
+    from app.web.vk_api import VKAPIError, send_vk_organizer_announcement_dm
+
+    group = SimpleNamespace(group_id="7777777", community_token="encrypted-token")
+    with (
+        patch("app.web.vk_api.decrypt_token", return_value="community-token"),
+        patch(
+            "app.web.vk_api._upload_message_photo",
+            new_callable=AsyncMock,
+            side_effect=VKAPIError("photos permission missing"),
+        ),
+        patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock) as api_call,
+    ):
+        sent = await send_vk_organizer_announcement_dm(
+            "5305539", "📣 АНОНС ГОТОВ", group, poster_data=b"poster"
+        )
+
+    assert sent is False
+    api_call.assert_not_awaited()
 
 
 # ─── Сервисный слой ──────────────────────────────────────────────

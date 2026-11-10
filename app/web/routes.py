@@ -1917,26 +1917,84 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
         group = next((g for g in groups if g.community_token), None)
         if group is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Подключите сообщество с ключом сообщений")
+        poster = await session.get(EventPoster, uid)
+        poster_data = bytes(poster.image_data) if poster is not None else None
+        poster_content_type = poster.content_type if poster is not None else "image/jpeg"
+        media_file_id = event.media_telegram_file_id
+        media_type = event.media_type or "photo"
+
+        # Older events may keep their photo in Telegram rather than event_posters.
+        if poster_data is None and media_file_id and media_type == "photo":
+            poster_data = _media_cache.get(media_file_id)
+            if poster_data is None:
+                bot = get_telegram_bot()
+                if bot is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="У мероприятия есть фото, но сейчас не удалось его загрузить. Анонс не отправлен.",
+                    )
+                try:
+                    tg_file = await bot.get_file(media_file_id)
+                    downloaded = await bot.download_file(tg_file.file_path)
+                    poster_data = downloaded.read() if hasattr(downloaded, "read") else bytes(downloaded)
+                except Exception as e:
+                    logger.warning("Не удалось загрузить фото мероприятия %s для VK: %s", uid, e)
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="У мероприятия есть фото, но сейчас не удалось его загрузить. Анонс не отправлен.",
+                    ) from e
+                if len(_media_cache) >= _MEDIA_CACHE_MAX:
+                    _media_cache.pop(next(iter(_media_cache)))
+                _media_cache[media_file_id] = poster_data
+            if poster_data[:3] == b"\x89PN":
+                poster_content_type = "image/png"
 
         target_id = f"{group.group_id}:{current.telegram_user_id}"
 
         price = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
         date_text = event.date.strftime("%d.%m.%Y %H:%M")
-        parts = [f"📢 Анонс мероприятия\n\n🎫 {event.title}"]
-        if event.description:
-            parts.append(event.description[:1800])
-        parts.extend([
-            f"📅 {date_text}",
-            f"📍 {event.location or 'Место уточняется'}",
-            f"💰 {'Бесплатно' if price <= 0 else f'{price:.0f} ₽'}",
-        ])
+        description = " ".join((event.description or "").split())
+        if len(description) > 700:
+            description = description[:697].rsplit(" ", 1)[0] + "…"
+        price_text = "Бесплатно" if price <= 0 else f"{price:.0f} ₽"
+        event_url = None
         if settings.webapp_url:
             separator = "&" if "?" in settings.webapp_url else "?"
-            parts.append(f"🎟 Открыть мероприятие: {settings.webapp_url}{separator}event_id={uid}")
+            event_url = f"{settings.webapp_url}{separator}event_id={uid}"
+        message_parts = [
+            "📣 АНОНС ГОТОВ",
+            "",
+            f"🎟 {event.title.strip()}",
+            "",
+            f"📅 {date_text}",
+            f"📍 {event.location or 'Место уточняется'}",
+            f"💳 {price_text}",
+        ]
+        if description:
+            message_parts.extend(["", description])
+        if event_url:
+            message_parts.extend(["", "Страница мероприятия — по кнопке ниже."])
+        else:
+            message_parts.extend(["", "Откройте мероприятие в приложении Билетера."])
+        keyboard = {
+            "inline": True,
+            "one_time": False,
+            "buttons": [[{
+                "action": {
+                    "type": "open_link",
+                    "label": "Открыть мероприятие",
+                    "link": event_url,
+                },
+                "color": "primary",
+            }]],
+        } if event_url else None
         sent = await send_vk_organizer_announcement_dm(
             current.telegram_user_id,
-            "\n\n".join(parts),
+            "\n".join(message_parts),
             group,
+            keyboard=keyboard,
+            poster_data=poster_data,
+            poster_content_type=poster_content_type,
         )
         if sent:
             await event_svc.add_publication(
