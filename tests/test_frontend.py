@@ -131,52 +131,22 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Оплата билетов сейчас недоступна" in APP_JS
 
 
-def test_vk_personal_wall_publication_uses_a_user_token_inside_vk_without_sending_it_to_backend():
-    """The user token stays in VK for the explicitly separate personal-wall path."""
-    assert 'vkBridgeRequest("VKWebAppGetAuthToken"' in APP_JS
-    assert 'scope: "photos,wall"' in APP_JS
-    assert 'vkBridgeRequest("VKWebAppShowWallPostBox"' in APP_JS
-    assert 'targetOwnerId === undefined ? -numericGroupId : Number(targetOwnerId)' in APP_JS
-    assert 'if (!isPersonalWall) composerParams.owner_id = wallOwnerId' in APP_JS
-    assert 'message: ""' in APP_JS
-    assert 'callVKAPIMethodFromMiniApp("wall.post"' in APP_JS
-    assert 'owner_id: numericUserId' in APP_JS
-    assert 'message: String(post.message || "")' in APP_JS
-    assert 'body: JSON.stringify({ vk_group_id: channelId, post_id: result.postId, vk_user_access_token' not in APP_JS
-    assert "function formatVKBridgeError(error" in APP_JS
-    assert "error.error_code || data.error_code" in APP_JS
-
-
-def test_vk_wall_test_publication_contains_only_the_event_photo():
-    publish_fn = APP_JS.split("async function publishVKWallPostFromMiniApp", 1)[1].split(
-        "function getVKCommunityTokenMethod", 1
-    )[0]
-    assert 'post.poster_url' in publish_fn
-    assert '"X-VK-Upload-URL": upload.upload_url' in publish_fn
-    assert 'api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-photo-upload`' in publish_fn
-    assert 'fetch(upload.upload_url' not in publish_fn
-    assert 'attachments: attachment' in publish_fn
-    assert 'message: ""' in publish_fn
-    assert 'callVKAPIMethodFromMiniApp("wall.post"' in publish_fn
-    assert 'message: String(post.message || "")' in publish_fn
-    assert 'post.attachments' not in publish_fn
-
-
-def test_vk_group_publication_uses_only_community_token_story_flow():
-    publish_fn = APP_JS.split("async function adminPublish(eventId)", 1)[1].split(
-        "async function adminPublishToPersonalWall", 1
-    )[0]
-    assert 'api(`/api/admin/events/${eventId}/publish`' in publish_fn
-    assert 'types.includes("story")' in publish_fn
-    assert "publishVKWallPostFromMiniApp(" not in publish_fn
-    assert "manual_fallback" not in publish_fn
-    assert "publication_error" in publish_fn
+def test_vk_wall_story_and_personal_publication_paths_are_removed():
+    for forbidden in (
+        "VKWebAppShowWallPostBox", "wall.post", "stories.getPhotoUploadServer",
+        "stories.save", "vk-wall-photo-upload", "vk-personal-wall-draft",
+        "vk-publications/manual", "client-diagnostics/vk",
+    ):
+        assert forbidden not in APP_JS
+        assert forbidden not in ROUTES
+    assert "async function adminPublish(eventId)" in APP_JS
+    assert "Опубликовать в Билетере" in APP_JS
 
 
 def test_vk_event_widget_updates_selected_community_through_server():
-    assert 'adminUpdateCommunityWidget(\'${event.id}\')' in APP_JS
+    assert "adminUpdateCommunityWidget('${event.id}')" in APP_JS
     widget_fn = APP_JS.split("async function adminUpdateCommunityWidget(eventId)", 1)[1].split(
-        "async function adminPublishToPersonalWall", 1
+        "async function adminRepost", 1
     )[0]
     assert 'api(`/api/admin/events/${eventId}/vk-widget`' in widget_fn
     assert 'mode: "confirm"' in widget_fn
@@ -184,29 +154,6 @@ def test_vk_event_widget_updates_selected_community_through_server():
     assert "VKWebAppShowCommunityWidgetPreviewBox" not in widget_fn
     assert '"/admin/events/{event_id}/vk-widget"' in ROUTES
     assert '"appWidgets.update"' in (Path(__file__).resolve().parent.parent / "app" / "web" / "vk_api.py").read_text(encoding="utf-8")
-
-
-def test_vk_can_open_a_separate_composer_for_the_current_users_personal_wall():
-    assert 'state.vkUserId = String(lp.vk_user_id || "")' in APP_JS
-    assert 'onclick="adminPublishToPersonalWall(\'${event.id}\')"' in APP_JS
-    assert 'publishVKWallPostFromMiniApp(\n            eventId, null, post, attemptId, null,' in APP_JS
-    assert '"photos.getWallUploadServer",\n                    isPersonalWall ? {} : { group_id: numericGroupId }' in APP_JS
-    assert '"X-VK-Photo-Target": isPersonalWall ? "user" : "group"' in APP_JS
-    assert '...(!isPersonalWall ? { group_id: numericGroupId } : {})' in APP_JS
-    assert 'if (!isPersonalWall) composerParams.owner_id = wallOwnerId' in APP_JS
-    assert 'target_type="vk_user_wall"' in ROUTES
-    assert 'vk-personal-wall-draft' in ROUTES
-
-
-def test_vk_publication_records_bridge_stages_and_client_errors_without_secrets():
-    assert 'fetch("/api/client-diagnostics/vk"' in APP_JS
-    assert 'window.addEventListener("error"' in APP_JS
-    assert 'window.addEventListener("unhandledrejection"' in APP_JS
-    assert '"VKWebAppShowWallPostBox"' in APP_JS
-    assert '"vk.publication.result"' in APP_JS
-    assert '"X-VK-Init-Data": state.initData' in APP_JS
-    assert '"$1=[REDACTED]"' in APP_JS
-    assert 'error.stack' not in APP_JS
 
 
 def test_appjs_vk_ticket_dm_flow():

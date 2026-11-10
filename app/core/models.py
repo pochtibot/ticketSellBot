@@ -175,11 +175,10 @@ class LinkCode(Base):
 
 
 class VKGroup(Base):
-    """VK-группа — цель публикации анонсов (аналог TG-канала).
+    """VK community connected for organizer tools, widgets, and ticket messages.
 
-    Организатор добавляет группу сам (по необходимости), community token
-    хранится зашифрованным (app/core/crypto.py). Подписка-изоляция группе
-    не нужна — организатор платит подписку на себя.
+    The encrypted community token is stored in app/core/crypto.py. The organizer,
+    rather than the community, owns the subscription.
     """
 
     __tablename__ = "vk_groups"
@@ -204,12 +203,7 @@ class VKGroup(Base):
 
 
 class EventPublication(Base):
-    """Публикация события в конкретную цель (placements).
-
-    Одно событие может быть опубликовано в N мест: TG-канал, VK-группа (история),
-    сообщения группы, личные сообщения. target_type:
-        telegram_channel | vk_group_wall | vk_group_story | vk_group_message | vk_user_dm
-    """
+    """External event placement record, such as a Telegram channel or VK widget."""
 
     __tablename__ = "event_publications"
 

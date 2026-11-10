@@ -8,7 +8,7 @@ import io
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs
 from uuid import UUID
 
 import httpx
@@ -34,9 +34,6 @@ from app.core.schemas import (
     InviteIssueIn,
     LinkCodeIn,
     LinkConsumeIn,
-    ManualVKPublicationIn,
-    ManualVKUserPublicationIn,
-    VKClientDiagnosticIn,
     MeUpdateIn,
     EventPremiumIn,
     PublishIn,
@@ -44,6 +41,7 @@ from app.core.schemas import (
     SubscribeMeIn,
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
+    VKWidgetUpdateIn,
     PromoCodeCreate,
     BuyIn,
     PriceRangesUpdate,
@@ -71,8 +69,6 @@ from app.web.announce import post_event_announcement, send_announcement_dm, send
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
     VKAPIError,
-    get_group_story_eligibility,
-    post_to_group_story,
     send_vk_ticket_dm,
     update_community_event_widget,
     verify_group_token,
@@ -88,47 +84,6 @@ from app.web.vk_pay import (
 
 logger = logging.getLogger("ticketbot.web.routes")
 router = APIRouter()
-
-
-@router.post("/client-diagnostics/vk", status_code=status.HTTP_202_ACCEPTED)
-async def record_vk_client_diagnostic(
-    body: VKClientDiagnosticIn,
-    auth_data: dict = Depends(validate_init_data),
-):
-    """Accept privacy-minimized client diagnostics from authenticated VK Mini Apps."""
-    if auth_data.get("platform") != "vk":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
-
-    error_message = body.error_message
-    if error_message:
-        # Defense in depth: never persist tokens, signatures, or signed URL query values.
-        import re
-        error_message = re.sub(
-            r"(?i)(access_token|vk_access_token|sign|hash|token)=([^&\s]+)",
-            r"\1=[REDACTED]",
-            error_message,
-        )[:240]
-
-    extra = {
-        "event_type": body.event,
-        "user_id": str(auth_data.get("user", {}).get("id", auth_data.get("vk_user_id", "unknown"))),
-        "platform": "vk",
-        "attempt_id": body.attempt_id,
-        "stage": body.stage,
-        "status": body.status,
-        "vk_platform": body.vk_platform,
-        "client_version": body.client_version,
-        "bridge_method": body.bridge_method,
-        "duration_ms": body.duration_ms,
-        "error_type": body.error_type,
-        "error_code": body.error_code,
-        "error_message": error_message,
-    }
-    if body.event in {"js.error", "js.unhandledrejection"} or body.status == "failed":
-        logger.warning("VK Mini App client diagnostic", extra=extra)
-    else:
-        logger.info("VK Mini App client diagnostic", extra=extra)
-    return {"accepted": True}
 
 
 async def _uploaded_poster_event_ids(session, event_ids: list[UUID]) -> set[UUID]:
@@ -1373,12 +1328,12 @@ async def register_my_channel(
         )
 
 
-# ─── Мои VK-группы (самообслуживание целей публикации) ─────────
+# ─── Подключённые VK-группы организатора ────────────────────────
 
 
 @router.get("/me/vk-groups")
 async def list_my_vk_groups(current: CurrentUser = Depends(get_current_user)):
-    """Список VK-групп организатора (цели публикации)."""
+    """Список VK-групп, подключённых организатором."""
     async with async_session_factory() as session:
         group_svc = VKGroupService(session)
         groups = await group_svc.list_vk_groups(current.user_id)
@@ -1399,7 +1354,7 @@ async def register_my_vk_group(
     body: VKGroupRegisterIn,
     current: CurrentUser = Depends(get_current_user),
 ):
-    """Зарегистрировать VK-группу как цель публикации (community token шифруется)."""
+    """Подключить VK-группу (community token шифруется)."""
     group_id = body.group_id.strip()
     if not group_id:
         raise HTTPException(
@@ -1841,14 +1796,7 @@ async def admin_publish_event(
     body: PublishIn | None = None,
     current: CurrentUser = Depends(get_current_user),
 ):
-    """Опубликовать мероприятие + отправить анонс в цель.
-
-    Цель: TG-канал (channel_id) или сообщество VK (vk_group_id). Для VK афиша
-    публикуется в историю сообщества с community token, если сообщество допущено VK.
-    Мульти-публикация:
-    одно событие может быть опубликовано в N мест (записи event_publications).
-    Ошибка анонса не откатывает флаг публикации.
-    """
+    """Сделать мероприятие доступным в приложении и отправить TG-анонс при запросе."""
     try:
         uid = UUID(event_id)
     except ValueError:
@@ -1856,90 +1804,35 @@ async def admin_publish_event(
 
     if body is None:
         body = PublishIn()
-    if body.channel_id and body.vk_group_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Укажите одну цель публикации: канал или сообщество",
-        )
-
-    # ─── VK-сообщество: пост на стене и, если доступно, история ──
-    if body.vk_group_id:
+    # VK event publishing only changes availability inside TicketBot. Posting to
+    # VK walls, stories, and user profiles is intentionally removed for a clean restart.
+    if current.platform is PlatformType.vk:
+        if body.channel_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Публикация в Telegram-канал недоступна из VK-приложения",
+            )
         async with async_session_factory() as session:
             event_svc = EventService(session)
-            group_svc = VKGroupService(session)
             event = await event_svc.get_by_id(uid)
             if event is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
             if not _can_manage_event(current, event):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-
-            group = await group_svc.get_by_group_id(body.vk_group_id.strip())
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
-            if group.owner_user_id != current.user_id and not current.is_super_admin:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этой группе")
-
-            # B: лимит free-организатора «1 опубликованное будущее»
             try:
                 await event_svc.ensure_free_slot(event)
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
-
-            poster = await session.get(EventPoster, uid)
-            if poster is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Перед публикацией анонса добавьте афишу мероприятия",
-                )
-            poster_bytes = bytes(poster.image_data)
             await event_svc.update(uid, is_published=True)
-            app_link = (
-                f"https://vk.com/app{settings.vk_app_id}?event_id={uid}"
-                if settings.vk_app_id
-                else None
-            )
-            # Use VK's current community metadata to avoid predictably rejected
-            # story uploads. Community-token stories are not available to every group.
-            story_eligible = await get_group_story_eligibility(
-                group.group_id, group.community_token or ""
-            )
-            story_ok = False
-            story_attempted = False
-            story_error = "Сообщество не подтверждено и не имеет значка «Огонь»"
-            if story_eligible:
-                story_attempted = True
-                story_ok = await post_to_group_story(
-                    group,
-                    poster_bytes,
-                    link_url=app_link,
-                    link_text="ticket" if app_link else None,
-                )
-                if not story_ok:
-                    story_error = "Не удалось опубликовать историю сообщества"
-            if story_attempted:
-                await event_svc.add_publication(
-                    event_id=uid,
-                    platform=PlatformType.vk,
-                    target_type="vk_group_story",
-                    target_id=group.group_id,
-                    created_by=current.user_id,
-                    status="posted" if story_ok else "error",
-                    last_error=None if story_ok else story_error,
-                )
             await session.commit()
-
         return {
             "id": str(uid),
             "is_published": True,
-            "announced": story_ok,
+            "announced": False,
             "platform": "vk",
-            "publication_types": ["story"] if story_ok else [],
-            "wall_attempted": False,
-            "story_attempted": story_attempted,
-            "publication_error": None if story_ok else story_error,
-            "group_id": group.group_id,
+            "publication_types": [],
         }
-    # ─── TG-канал / DM (как было) ────────────────────────────────
+
     target_channel_id: UUID | None = None
     if body.channel_id:
         target_channel_id = body.channel_id
@@ -1999,7 +1892,7 @@ async def admin_publish_event(
 @router.post("/admin/events/{event_id}/vk-widget")
 async def admin_update_vk_event_widget(
     event_id: str,
-    body: PublishIn,
+    body: VKWidgetUpdateIn,
     current: CurrentUser = Depends(get_current_user),
 ):
     """Update the selected community's app widget with this event's details."""
@@ -2065,220 +1958,6 @@ async def admin_update_vk_event_widget(
         "widget_type": "text",
         "message": "Виджет сообщества обновлён",
     }
-
-
-@router.post("/admin/events/{event_id}/vk-publications/manual")
-async def record_manual_vk_publication(
-    event_id: str,
-    body: ManualVKPublicationIn,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Record a successful post returned by VKWebAppShowWallPostBox."""
-    if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
-    try:
-        uid = UUID(event_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
-
-    async with async_session_factory() as session:
-        event_svc = EventService(session)
-        group_svc = VKGroupService(session)
-        event = await event_svc.get_by_id(uid)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        group = await group_svc.get_by_group_id(body.vk_group_id.strip())
-        if group is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
-        if group.owner_user_id != current.user_id and not current.is_super_admin:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
-        await event_svc.add_publication(
-            event_id=uid,
-            platform=PlatformType.vk,
-            target_type="vk_group_wall",
-            target_id=group.group_id,
-            created_by=current.user_id,
-            status="posted",
-        )
-        await session.commit()
-    return {"event_id": str(uid), "group_id": group.group_id, "status": "posted"}
-
-
-@router.post("/admin/events/{event_id}/vk-personal-wall-draft")
-async def get_vk_personal_wall_draft(
-    event_id: str,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Prepare an event announcement for the VK user's personal wall composer."""
-    if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
-    try:
-        uid = UUID(event_id)
-        vk_user_id = int(current.telegram_user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или профиля")
-    if vk_user_id <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить профиль пользователя")
-
-    async with async_session_factory() as session:
-        event_svc = EventService(session)
-        event = await event_svc.get_by_id(uid)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        poster = await session.get(EventPoster, uid)
-        if poster is None and not event.media_telegram_file_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Для публикации сначала добавьте афишу")
-
-    app_link = f"https://vk.com/app{settings.vk_app_id}?event_id={uid}" if settings.vk_app_id else None
-    return {
-        "owner_id": vk_user_id,
-        "message": "\n".join([
-            f"🎫 {event.title}",
-            *( ["", event.description] if event.description else [] ),
-            "",
-            f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
-            f"📍 {event.location or 'Место уточняется'}",
-            f"💰 {'Бесплатно' if float(event.price) <= 0 else f'{float(event.price):g} ₽'}",
-            f"🎟 Осталось билетов: {event.available_tickets}/{event.total_tickets}",
-            *( ["", f"Билеты и подробности: {app_link}"] if app_link else [] ),
-        ]),
-        "poster_url": f"/api/events/{uid}/media",
-    }
-
-
-@router.post("/admin/events/{event_id}/vk-publications/personal-manual")
-async def record_manual_vk_personal_publication(
-    event_id: str,
-    body: ManualVKUserPublicationIn,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Record a user-confirmed VK post on the organizer's personal wall."""
-    if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
-    try:
-        uid = UUID(event_id)
-        vk_user_id = int(current.telegram_user_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный ID мероприятия или профиля")
-    if vk_user_id <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не удалось определить профиль пользователя")
-
-    async with async_session_factory() as session:
-        event_svc = EventService(session)
-        event = await event_svc.get_by_id(uid)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        await event_svc.add_publication(
-            event_id=uid,
-            platform=PlatformType.vk,
-            target_type="vk_user_wall",
-            target_id=str(vk_user_id),
-            created_by=current.user_id,
-            status="posted",
-        )
-        await session.commit()
-    return {"event_id": str(uid), "user_id": str(vk_user_id), "status": "posted"}
-
-
-@router.post("/admin/events/{event_id}/vk-wall-photo-upload")
-async def relay_vk_wall_photo_upload(
-    event_id: str,
-    request: Request,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Relay the VK photo upload from the same origin to avoid browser CORS failures.
-
-    VK still issues the upload URL and saves the photo through VK Bridge; only
-    the raw multipart upload is proxied here. The URL is restricted to VK hosts.
-    """
-    if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Доступно только из приложения")
-    try:
-        uid = UUID(event_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
-
-    photo_target = (request.headers.get("X-VK-Photo-Target") or "group").strip().lower()
-    group_id = (request.headers.get("X-VK-Group-ID") or "").strip().lstrip("-")
-    upload_url = request.headers.get("X-VK-Upload-URL") or ""
-    try:
-        parsed_url = urlsplit(upload_url)
-        host = (parsed_url.hostname or "").lower()
-        allowed_host = host == "vk.com" or host.endswith(".vk.com")
-        valid_port = parsed_url.port in (None, 443)
-    except ValueError:
-        allowed_host = valid_port = False
-        parsed_url = None
-    if (
-        not parsed_url
-        or parsed_url.scheme != "https"
-        or not allowed_host
-        or not valid_port
-        or parsed_url.username
-        or parsed_url.password
-    ):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Получен недопустимый адрес загрузки")
-    if photo_target not in {"group", "user"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная цель загрузки фотографии")
-    if photo_target == "group":
-        if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректное сообщество")
-    elif group_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Для личной страницы нельзя передавать сообщество")
-
-    content_type = (request.headers.get("content-type") or "").split(";", 1)[0].lower()
-    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Ожидалась афиша в формате JPG, PNG или WebP")
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > _POSTER_UPLOAD_MAX_BYTES:
-                raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Некорректный размер файла")
-    image = bytearray()
-    async for chunk in request.stream():
-        image.extend(chunk)
-        if len(image) > _POSTER_UPLOAD_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Афиша должна быть не больше 8 МБ")
-    if not image:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Афиша пуста")
-
-    async with async_session_factory() as session:
-        event_svc = EventService(session)
-        event = await event_svc.get_by_id(uid)
-        if event is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-        if not _can_manage_event(current, event):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа")
-        if photo_target == "group":
-            group_svc = VKGroupService(session)
-            group = await group_svc.get_by_group_id(group_id)
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не найдено")
-            if group.owner_user_id != current.user_id and not current.is_super_admin:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к этому сообществу")
-
-    try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            response = await client.post(
-                upload_url,
-                files={"photo": ("poster.jpg", bytes(image), content_type)},
-            )
-            response.raise_for_status()
-            upload_result = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("VK photo upload relay failed for event %s: %s", uid, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Площадка отклонила загрузку афиши")
-    if not isinstance(upload_result, dict) or not all(key in upload_result for key in ("server", "photo", "hash")):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Получен неполный результат загрузки афиши")
-    return upload_result
 
 
 @router.get("/admin/events/{event_id}/publications")

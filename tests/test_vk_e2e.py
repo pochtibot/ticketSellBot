@@ -7,7 +7,7 @@
 2. VK-пользователь вводит код → вход по VK ведёт на канон организатора.
 3. Организатор добавляет VK-группу (self-service, token шифруется).
 4. Создаёт мероприятие (owner) + соработника (менеджера).
-5. Публикует афишу в VK-историю группы — запись event_publications.
+5. Делает мероприятие доступным в приложении без отправки поста в VK.
 6. Покупатель (VK, отдельный аккаунт) покупает билет.
 7. Организатор проверяет билет по коду (проверил в TG, куплено в VK) —
    киллер-фича: check-in по коду работает с любой площадки.
@@ -103,26 +103,7 @@ async def test_full_vk_organizer_cycle(db_client, db_session):
     await event_svc.add_manager(event.id, mgr.id)
     await db_session.commit()
 
-    # ── 5. Публикация афиши в VK-историю группы через web ──
-    with (
-        patch("app.web.routes.get_group_story_eligibility", new_callable=AsyncMock, return_value=True),
-        patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True),
-    ):
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/publish",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": group.group_id},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["announced"] is True
-
-    resp = await db_client.get(
-        f"/api/admin/events/{event.id}/publications", headers={"X-Skip-Auth": "1"},
-    )
-    pubs = resp.json()["publications"]
-    assert any(p["target_type"] == "vk_group_story" and p["status"] == "posted" for p in pubs)
-
-    # ── 6. Покупатель из VK покупает билет ──
+    # ── 5. Покупатель проверяет доступное мероприятие и покупает билет ──
     ticket = await ticket_svc.buy_ticket(buyer.id, event.id)
     assert ticket.validation_code is not None
     await db_session.commit()

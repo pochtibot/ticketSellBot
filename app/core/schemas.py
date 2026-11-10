@@ -255,65 +255,20 @@ class AddManagerIn(BaseModel):
 
 
 class VKGroupRegisterIn(BaseModel):
-    """Зарегистрировать VK-группу как цель публикации (self-service)."""
+    """Подключить VK-сообщество к кабинету организатора."""
     group_id: str  # VK community id (число или -id)
     title: Optional[str] = None
     community_token: Optional[str] = None  # от VKWebAppGetCommunityToken, шифруется
 
 
 class PublishIn(BaseModel):
-    """Публикация мероприятия: TG-канал либо VK-группа."""
+    """Публикация мероприятия в Telegram."""
     channel_id: Optional[UUID] = None
-    vk_group_id: Optional[str] = None
 
 
-class ManualVKPublicationIn(BaseModel):
-    """A successful wall post reported by VK Bridge in the active Mini App."""
+class VKWidgetUpdateIn(BaseModel):
+    """Обновить карточку мероприятия в виджете сообщества."""
     vk_group_id: str
-    post_id: int = Field(gt=0)
-
-
-class ManualVKUserPublicationIn(BaseModel):
-    """A successful personal-wall post reported by VK Bridge."""
-    post_id: int = Field(gt=0)
-
-
-class VKClientDiagnosticIn(BaseModel):
-    """Allowlisted, privacy-minimized VK Mini App diagnostic event."""
-    event: Literal[
-        "vk.publication.stage",
-        "vk.publication.result",
-        "js.error",
-        "js.unhandledrejection",
-    ]
-    attempt_id: str = Field(min_length=8, max_length=64)
-    stage: Optional[Literal[
-        "publish_request",
-        "auth",
-        "poster_download",
-        "photo_upload_server",
-        "photo_upload_relay",
-        "photo_save",
-        "wall_composer",
-        "publication_record",
-        "frontend",
-    ]] = None
-    status: Optional[Literal["started", "success", "failed", "missing_post_id"]] = None
-    vk_platform: Optional[Literal[
-        "mobile_android", "mobile_iphone", "mobile_ipad", "mobile_web",
-        "desktop_web", "desktop_web_messenger", "desktop_app_messenger",
-        "mobile_android_messenger", "mobile_iphone_messenger",
-    ]] = None
-    client_version: Optional[str] = Field(default=None, max_length=40)
-    bridge_method: Optional[Literal[
-        "VKWebAppGetAuthToken",
-        "VKWebAppCallAPIMethod",
-        "VKWebAppShowWallPostBox",
-    ]] = None
-    duration_ms: Optional[int] = Field(default=None, ge=0, le=300_000)
-    error_type: Optional[str] = Field(default=None, max_length=32)
-    error_code: Optional[str] = Field(default=None, max_length=32)
-    error_message: Optional[str] = Field(default=None, max_length=240)
 
 
 # ─── Payment ─────────────────────────────────────────────────────────────────

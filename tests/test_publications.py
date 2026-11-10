@@ -4,7 +4,6 @@
 VK-анонс публикуется фотоисторией сообщества с community token.
 """
 
-import uuid
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -13,12 +12,9 @@ import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 
-from app.core.models import EventPoster, PlatformType, SubscriptionTier, VKGroup
+from app.core.models import EventPoster, PlatformType, SubscriptionTier
 from app.core.services import UserService, EventService, VKGroupService
 from app.web.vk_api import (
-    VKAPIError,
-    post_to_group_story,
-    get_group_story_eligibility,
     update_community_event_widget,
 )
 
@@ -64,28 +60,28 @@ async def test_add_publication_and_list(db_session, owner_event_vk_group):
     event_svc = EventService(db_session)
 
     await event_svc.add_publication(
-        event.id, PlatformType.vk, "vk_group_story", group.group_id,
+        event.id, PlatformType.telegram, "telegram_channel", group.group_id,
         created_by=owner.id, status="posted",
     )
     pubs = await event_svc.list_publications(event.id)
     assert len(pubs) == 1
-    assert pubs[0].target_type == "vk_group_story"
+    assert pubs[0].target_type == "telegram_channel"
     assert pubs[0].status == "posted"
 
 
 async def test_add_publication_idempotent(db_session, owner_event_vk_group):
     owner, event, group = owner_event_vk_group
     event_svc = EventService(db_session)
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id)
+    await event_svc.add_publication(event.id, PlatformType.telegram, "telegram_channel", group.group_id)
     # Повторная публикация в ту же цель — обновление, не дубликат
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id, status="posted")
+    await event_svc.add_publication(event.id, PlatformType.telegram, "telegram_channel", group.group_id, status="posted")
     assert len(await event_svc.list_publications(event.id)) == 1
 
 
 async def test_remove_publication(db_session, owner_event_vk_group):
     owner, event, group = owner_event_vk_group
     event_svc = EventService(db_session)
-    await event_svc.add_publication(event.id, PlatformType.vk, "vk_group_story", group.group_id)
+    await event_svc.add_publication(event.id, PlatformType.telegram, "telegram_channel", group.group_id)
     pid = (await event_svc.list_publications(event.id))[0].id
     assert await event_svc.remove_publication(pid) is True
     assert await event_svc.list_publications(event.id) == []
@@ -118,88 +114,6 @@ class TestVKAPI:
         assert "Событие для виджета" in code
         assert "Москва" in code
 
-    async def test_post_to_group_story_success(self):
-        group = VKGroup(group_id="123", community_token="")
-        class UploadResponse:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"upload_result": "uploaded-story-hash"}
-
-        class UploadClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            async def post(self, url, files):
-                assert url == "https://upload.vk.test/story"
-                assert files["file0"][1] == b"poster"
-                return UploadResponse()
-
-        api_responses = [
-            {"upload_url": "https://upload.vk.test/story"},
-            {"items": [{"id": 42}]},
-        ]
-        with (
-            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, side_effect=api_responses) as call,
-            patch("app.web.vk_api.httpx.AsyncClient", side_effect=lambda **kwargs: UploadClient()),
-        ):
-            group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-            assert await post_to_group_story(
-                group,
-                b"poster",
-                link_url="https://vk.com/app123?event_id=event-1",
-                link_text="ticket",
-            ) is True
-            assert [call_args.args[0] for call_args in call.await_args_list] == [
-                "stories.getPhotoUploadServer", "stories.save"
-            ]
-            assert call.await_args_list[0].kwargs["group_id"] == 123
-            assert call.await_args_list[0].kwargs["link_text"] == "ticket"
-            assert "uploaded-story-hash" in call.await_args_list[1].kwargs["upload_results_json"]
-
-    async def test_post_to_group_story_no_token(self):
-        group = VKGroup(group_id="123", community_token="")
-        assert await post_to_group_story(group, b"poster") is False
-
-    async def test_post_to_group_story_api_error(self):
-        group = VKGroup(group_id="123", community_token="")
-        with (
-            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, side_effect=VKAPIError("boom")),
-        ):
-            group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-            assert await post_to_group_story(group, b"poster") is False
-
-    async def test_get_group_story_eligibility_uses_community_metadata(self):
-        group = VKGroup(group_id="123", community_token="")
-        group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-        with (
-            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, return_value={
-                "groups": [{"id": 123, "verified": 1, "trending": 0}],
-            }) as call,
-        ):
-            assert await get_group_story_eligibility("123", group.community_token) is True
-        assert call.await_args.args[0] == "groups.getById"
-        assert call.await_args.kwargs["fields"] == "verified,trending"
-
-    async def test_get_group_story_eligibility_rejects_unqualified_group(self):
-        group = VKGroup(group_id="123", community_token="")
-        group.community_token = Fernet(TEST_KEY).encrypt(b"token").decode()
-        with (
-            patch("app.config.settings.vk_token_encryption_key", TEST_KEY),
-            patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, return_value={
-                "groups": [{"id": 123, "verified": 0, "trending": 0}],
-            }),
-        ):
-            assert await get_group_story_eligibility("123", group.community_token) is False
-
-
 # ─── Web API ─────────────────────────────────────────────────────
 
 
@@ -231,258 +145,46 @@ class TestPublishWeb:
             ("vk_group_widget", "posted"),
         ]
 
-    async def test_publish_to_vk_group_creates_publication(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-
-        from app.core.models import PlatformType
-        from app.web.dependencies import CurrentUser, get_current_user
-        test_app = db_client._transport.app
-        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-            user_id=owner.id,
-            telegram_user_id="55",
-            name="VK admin",
-            is_super_admin=False,
-            platform=PlatformType.vk,
-        )
-        with (
-            patch("app.web.routes.get_group_story_eligibility", new_callable=AsyncMock, return_value=True),
-            patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True),
-        ):
-            resp = await db_client.post(
-                f"/api/admin/events/{event.id}/publish",
-                headers={"X-Skip-Auth": "1"},
-                json={"vk_group_id": group.group_id},
-            )
-        test_app.dependency_overrides.clear()
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["announced"] is True
-        assert data["platform"] == "vk"
-        assert data["publication_types"] == ["story"]
-        assert data["story_attempted"] is True
-        assert data["publication_error"] is None
-        assert "manual_fallback" not in data
-        assert "manual_post" not in data
-        assert data["group_id"] == group.group_id
-
-        # Запись публикации создана
-        resp = await db_client.get(
-            f"/api/admin/events/{event.id}/publications", headers={"X-Skip-Auth": "1"},
-        )
-        pubs = resp.json()["publications"]
-        assert {(pub["target_type"], pub["status"]) for pub in pubs} == {
-            ("vk_group_story", "posted"),
-        }
-
-    async def test_publish_to_vk_group_reports_ineligible_story_without_user_token_fallback(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-
-        with patch("app.web.routes.get_group_story_eligibility", new_callable=AsyncMock, return_value=False):
-            resp = await db_client.post(
-                f"/api/admin/events/{event.id}/publish",
-                headers={"X-Skip-Auth": "1"},
-                json={"vk_group_id": group.group_id},
-            )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["announced"] is False
-        assert data["story_attempted"] is False
-        assert data["publication_error"] == "Сообщество не подтверждено и не имеет значка «Огонь»"
-        assert "manual_fallback" not in data
-        assert "manual_post" not in data
-
-    async def test_record_vk_bridge_publication_for_linked_group(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-        from app.web.dependencies import CurrentUser, get_current_user
-        test_app = db_client._transport.app
-        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-            user_id=owner.id,
-            telegram_user_id="55",
-            name="VK admin",
-            is_super_admin=False,
-            platform=PlatformType.vk,
-        )
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/vk-publications/manual",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": group.group_id, "post_id": 88},
-        )
-        test_app.dependency_overrides.clear()
-        assert resp.status_code == 200
-        publications = (await EventService(db_session).list_publications(event.id))
-        assert len(publications) == 1
-        assert publications[0].target_type == "vk_group_wall"
-        assert publications[0].status == "posted"
-
-    async def test_vk_wall_photo_upload_is_relayed_from_server(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-        from app.web.dependencies import CurrentUser, get_current_user
-        test_app = db_client._transport.app
-        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-            user_id=owner.id,
-            telegram_user_id="55",
-            name="VK admin",
-            is_super_admin=False,
-            platform=PlatformType.vk,
-        )
-
-        class UploadResponse:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
-
-        class UploadClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            async def post(self, url, files):
-                assert url == "https://pu.vk.com/upload.php?token=temporary"
-                assert files["photo"][1] == b"poster-bytes"
-                return UploadResponse()
-
-        with patch("app.web.routes.httpx.AsyncClient", side_effect=lambda **kwargs: UploadClient()):
-            resp = await db_client.post(
-                f"/api/admin/events/{event.id}/vk-wall-photo-upload",
-                headers={
-                    "X-Skip-Auth": "1",
-                    "X-VK-Group-ID": group.group_id,
-                    "X-VK-Upload-URL": "https://pu.vk.com/upload.php?token=temporary",
-                    "Content-Type": "image/jpeg",
-                },
-                content=b"poster-bytes",
-            )
-        test_app.dependency_overrides.clear()
-        assert resp.status_code == 200
-        assert resp.json() == {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
-
-    async def test_vk_personal_wall_draft_and_photo_relay_use_user_target(self, db_client, db_session, owner_event_vk_group):
+    async def test_vk_publish_only_makes_event_available_in_ticketbot(self, db_client, db_session, owner_event_vk_group):
         owner, event, _group = owner_event_vk_group
+        event.is_published = False
         await db_session.commit()
+
         from app.web.dependencies import CurrentUser, get_current_user
         test_app = db_client._transport.app
         test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
             user_id=owner.id,
-            telegram_user_id="5305539",
+            telegram_user_id="55",
             name="VK admin",
             is_super_admin=False,
             platform=PlatformType.vk,
         )
-
-        draft = await db_client.post(
-            f"/api/admin/events/{event.id}/vk-personal-wall-draft",
+        resp = await db_client.post(
+            f"/api/admin/events/{event.id}/publish",
             headers={"X-Skip-Auth": "1"},
         )
-        assert draft.status_code == 200
-        assert draft.json()["owner_id"] == 5305539
-        assert draft.json()["poster_url"] == f"/api/events/{event.id}/media"
-
-        class UploadResponse:
-            def raise_for_status(self):
-                pass
-
-            def json(self):
-                return {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
-
-        class UploadClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-            async def post(self, url, files):
-                assert url == "https://pu.vk.com/upload.php?token=temporary"
-                assert files["photo"][1] == b"poster-bytes"
-                return UploadResponse()
-
-        with patch("app.web.routes.httpx.AsyncClient", side_effect=lambda **kwargs: UploadClient()):
-            relayed = await db_client.post(
-                f"/api/admin/events/{event.id}/vk-wall-photo-upload",
-                headers={
-                    "X-Skip-Auth": "1",
-                    "X-VK-Photo-Target": "user",
-                    "X-VK-Upload-URL": "https://pu.vk.com/upload.php?token=temporary",
-                    "Content-Type": "image/jpeg",
-                },
-                content=b"poster-bytes",
-            )
         test_app.dependency_overrides.clear()
-        assert relayed.status_code == 200
-        assert relayed.json() == {"server": 3, "photo": "photo-data", "hash": "upload-hash"}
 
-    async def test_publish_to_vk_group_requires_poster(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        poster = await db_session.get(EventPoster, event.id)
-        await db_session.delete(poster)
-        await db_session.commit()
-
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/publish",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": group.group_id},
-        )
-
-        assert resp.status_code == 409
-        assert "афишу" in resp.json()["detail"]
-
-    async def test_publish_to_foreign_vk_group_403(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        # Чужая группа (другой владелец)
-        user_svc = UserService(db_session)
-        other = await user_svc.get_or_create(PlatformType.telegram, "other_group_owner")
-        with patch("app.config.settings.vk_token_encryption_key", TEST_KEY):
-            group_svc = VKGroupService(db_session)
-            foreign = await group_svc.register_vk_group(other.id, "999999", title="Чужая")
-        await db_session.commit()
-
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/publish",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": foreign.group_id},
-        )
-        assert resp.status_code == 403
-
-    async def test_publish_to_unknown_vk_group_404(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/publish",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": "no_such_group"},
-        )
-        assert resp.status_code == 404
-
-    async def test_publish_both_targets_400(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
-        await db_session.commit()
-        resp = await db_client.post(
-            f"/api/admin/events/{event.id}/publish",
-            headers={"X-Skip-Auth": "1"},
-            json={"vk_group_id": group.group_id, "channel_id": str(uuid.uuid4())},
-        )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "id": str(event.id),
+            "is_published": True,
+            "announced": False,
+            "platform": "vk",
+            "publication_types": [],
+        }
+        await db_session.refresh(event)
+        assert event.is_published is True
+        assert await EventService(db_session).list_publications(event.id) == []
 
     async def test_remove_publication(self, db_client, db_session, owner_event_vk_group):
-        owner, event, group = owner_event_vk_group
+        owner, event, _group = owner_event_vk_group
+        event_svc = EventService(db_session)
+        await event_svc.add_publication(
+            event.id, PlatformType.telegram, "telegram_channel", "tg-channel-1",
+            created_by=owner.id, status="posted",
+        )
         await db_session.commit()
-        with (
-            patch("app.web.routes.get_group_story_eligibility", new_callable=AsyncMock, return_value=True),
-            patch("app.web.routes.post_to_group_story", new_callable=AsyncMock, return_value=True),
-        ):
-            await db_client.post(
-                f"/api/admin/events/{event.id}/publish",
-                headers={"X-Skip-Auth": "1"},
-                json={"vk_group_id": group.group_id},
-            )
         resp = await db_client.get(
             f"/api/admin/events/{event.id}/publications", headers={"X-Skip-Auth": "1"},
         )

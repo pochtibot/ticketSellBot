@@ -198,7 +198,7 @@
 | 161 | VK: аутентификация Mini App — launch params + `sign` (HMAC-SHA256), резолв канона | ✅ done (код) | 2026-08-08 | `feature/vk-auth` |
 | 162 | VK: соработники мероприятия — `event_managers` M2M, расширение `_can_manage_event` | ✅ done (код) | 2026-08-08 | `feature/vk-managers` |
 | 163 | VK: модель `vk_groups` + self-service групп + `VKWebAppGetCommunityToken` (зашифр. токен) | ✅ done (код) | 2026-08-08 | `feature/vk-groups` |
-| 164 | VK: публикации `event_publications` + постинг `wall.post` / `messages.send` | ✅ done (код) | 2026-08-08 | `feature/vk-publications` |
+| 164 | VK: публикации `event_publications` + постинг `wall.post` / `messages.send` | ⏸️ публикационные способы удалены для переработки; доставка билетов в ЛС сохранена | 2026-11-10 | `feature/vk-publications` |
 | 165 | VK: фронтенд Mini App (переиспользовать `app.js` или отдельный entry — decision №2) | ✅ done (код) | 2026-08-08 | `feature/vk-frontend` |
 | 166 | VK: TDD-контур для VK-фич (аналог harness для Telegram) | ✅ done (код) | 2026-08-08 | `feature/vk-testing` |
 | 167 | Fix: VK Mini App показывал «Откройте кабинет в Telegram» — vk-bridge 3.x возвращает launch params объектом напрямую, а код читал `res.launch_params` | ✅ done | 2026-08-10 | `8fdac65` (PR #2, errors #063) |

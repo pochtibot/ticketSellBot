@@ -1,4 +1,4 @@
-"""VK API клиент для историй сообществ и личных сообщений.
+"""VK API client for community widgets and private messages.
 
 Community token хранится зашифрованным и расшифровывается только для API-запроса.
 """
@@ -65,37 +65,6 @@ async def verify_group_token(group_id: str, token: str) -> bool:
     return False
 
 
-def _response_items(response) -> list[dict]:
-    if isinstance(response, list):
-        return [item for item in response if isinstance(item, dict)]
-    if isinstance(response, dict):
-        items = response.get("groups") or response.get("items") or []
-        return [item for item in items if isinstance(item, dict)]
-    return []
-
-
-async def get_group_story_eligibility(group_id: str, community_token: str) -> bool:
-    """Return True only when VK reports a verified or trending community."""
-    token = decrypt_token(community_token or "")
-    if not token:
-        return False
-    try:
-        response = await vk_api_call(
-            "groups.getById",
-            token,
-            group_ids=str(group_id),
-            fields="verified,trending",
-        )
-        return any(
-            str(item.get("id")) == str(group_id)
-            and (bool(int(item.get("verified") or 0)) or bool(int(item.get("trending") or 0)))
-            for item in _response_items(response)
-        )
-    except (VKAPIError, TypeError, ValueError, KeyError) as e:
-        logger.warning("Could not check VK story eligibility for group %s: %s", group_id, e)
-        return False
-
-
 async def update_community_event_widget(group, event) -> None:
     """Replace a community app's text widget with a compact event card."""
     token = decrypt_token(group.community_token or "")
@@ -149,68 +118,4 @@ async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
         return True
     except VKAPIError as e:
         logger.error("Ошибка messages.send покупателю %s: %s", vk_user_id, e)
-        return False
-
-
-async def post_to_group_story(
-    group,
-    image: bytes,
-    *,
-    link_url: str | None = None,
-    link_text: str | None = None,
-) -> bool:
-    """Загрузить афишу в историю VK-сообщества и опубликовать её."""
-    token = decrypt_token(group.community_token or "")
-    if not token:
-        logger.warning("Нет community token для VK-группы %s", group.group_id)
-        return False
-    if not image:
-        logger.warning("Для истории VK не передана афиша сообщества %s", group.group_id)
-        return False
-    if bool(link_url) != bool(link_text):
-        logger.warning("Для ссылки истории VK нужны оба параметра: link_url и link_text")
-        return False
-
-    try:
-        params = {"group_id": int(group.group_id.lstrip("-"))}
-        if link_url and link_text:
-            params.update(link_url=link_url, link_text=link_text)
-        upload_server = await vk_api_call("stories.getPhotoUploadServer", token, **params)
-        upload_url = upload_server.get("upload_url")
-        if not upload_url:
-            raise VKAPIError("VK не вернул upload_url для истории")
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                upload_url,
-                files={"file0": ("poster.jpg", image, "image/jpeg")},
-            )
-            response.raise_for_status()
-            upload_data = response.json()
-
-        upload_result = upload_data.get("upload_result")
-        if not upload_result and isinstance(upload_data.get("response"), dict):
-            upload_result = upload_data["response"].get("upload_result")
-        if not upload_result:
-            raise VKAPIError("VK не вернул результат загрузки афиши")
-
-        saved = await vk_api_call(
-            "stories.save",
-            token,
-            upload_results_json=json.dumps(
-                [{"upload_result": upload_result}], ensure_ascii=False
-            ),
-        )
-        items = saved.get("items", []) if isinstance(saved, dict) else []
-        if not items:
-            raise VKAPIError("VK не подтвердил публикацию истории")
-        story_id = items[0].get("id") if isinstance(items[0], dict) else None
-        logger.info(
-            "История опубликована в VK-группу %s%s",
-            group.group_id,
-            f" (story_id={story_id})" if story_id else "",
-        )
-        return True
-    except (VKAPIError, httpx.HTTPError, ValueError, KeyError) as e:
-        logger.error("Ошибка публикации истории в VK-группу %s: %s", group.group_id, e)
         return False

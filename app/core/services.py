@@ -1100,7 +1100,7 @@ class ChannelAdminService:
 # ─── VKGroup Service ─────────────────────────────────────────────────────────
 
 class VKGroupService:
-    """VK-группы как цели публикации (self-service организатора)."""
+    """VK-группы, подключённые организатором (self-service)."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
