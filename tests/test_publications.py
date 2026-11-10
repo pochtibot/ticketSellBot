@@ -1,7 +1,7 @@
 """Event placement records and VK Mini App publishing behavior."""
 
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest_asyncio
 from cryptography.fernet import Fernet
@@ -104,10 +104,72 @@ class TestPublishWeb:
             "announced": False,
             "platform": "vk",
             "publication_types": [],
+            "vk_group_id": "12345678",
         }
         await db_session.refresh(event)
         assert event.is_published is True
         assert await EventService(db_session).list_publications(event.id) == []
+
+    async def test_vk_publish_sends_announcement_to_organizer_dm(self, db_client, db_session, owner_event_vk_group):
+        owner, event, group = owner_event_vk_group
+        from app.web.dependencies import CurrentUser, get_current_user
+        test_app = db_client._transport.app
+        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id=owner.id,
+            telegram_user_id="5305539",
+            name="VK organizer",
+            is_super_admin=False,
+            platform=PlatformType.vk,
+        )
+        with patch(
+            "app.web.routes.send_vk_organizer_announcement_dm",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as send_dm:
+            resp = await db_client.post(
+                f"/api/admin/events/{event.id}/send-vk-announcement",
+                headers={"X-Skip-Auth": "1"},
+            )
+            test_app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"sent": True, "already_sent": False, "group_id": group.group_id}
+        assert send_dm.await_args.args[0] == "5305539"
+        assert "Событие для публикации" in send_dm.await_args.args[1]
+        publications = await EventService(db_session).list_publications(event.id)
+        assert len(publications) == 1
+        assert publications[0].target_type == "vk_organizer_dm"
+
+    async def test_vk_organizer_announcement_is_not_sent_twice(self, db_client, db_session, owner_event_vk_group):
+        owner, event, group = owner_event_vk_group
+        from app.web.dependencies import CurrentUser, get_current_user
+        test_app = db_client._transport.app
+        test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id=owner.id,
+            telegram_user_id="5305539",
+            name="VK organizer",
+            is_super_admin=False,
+            platform=PlatformType.vk,
+        )
+        service = EventService(db_session)
+        await service.add_publication(
+            event_id=event.id,
+            platform=PlatformType.vk,
+            target_type="vk_organizer_dm",
+            target_id=f"{group.group_id}:5305539",
+        )
+        await db_session.commit()
+
+        with patch("app.web.routes.send_vk_organizer_announcement_dm", new_callable=AsyncMock) as send_dm:
+            resp = await db_client.post(
+                f"/api/admin/events/{event.id}/send-vk-announcement",
+                headers={"X-Skip-Auth": "1"},
+            )
+        test_app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["already_sent"] is True
+        send_dm.assert_not_awaited()
 
     async def test_remove_publication(self, db_client, db_session, owner_event_vk_group):
         owner, event, _group = owner_event_vk_group

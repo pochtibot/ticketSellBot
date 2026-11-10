@@ -2030,9 +2030,9 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                             `<option value="${c.id}">${escapeHtml(c.title || c.telegram_channel_id)}</option>`
                         ).join('')}
                     </select>` : ''}
-                <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">${isVKMode() ? '🌐 Опубликовать в Билетере' : '📢 Опубликовать'}</button>
+                <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">${isVKMode() ? '🌐 Опубликовать и отправить анонс себе' : '📢 Опубликовать'}</button>
             </div>
-            ${isVKMode() ? '<span class="hint">Мероприятие станет доступно в приложении. Публикация записей в VK временно отключена.</span>' : ''}
+            ${isVKMode() ? '<span class="hint">Анонс придёт в ваши VK-сообщения от подключённого сообщества после разрешения.</span>' : ''}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -2242,7 +2242,23 @@ async function adminPublish(eventId) {
         });
         const where = channelId ? "" : " в DM";
         if (isVKMode()) {
-            showToast("✅ Мероприятие опубликовано в Билетере. Публикация записей в VK пока отключена.");
+            if (!res.vk_group_id) {
+                showToast("✅ Мероприятие опубликовано в Билетере. Подключите сообщество с ключом сообщений, чтобы получить анонс в личные сообщения.");
+            } else if (!window.vkBridge) {
+                showToast("✅ Мероприятие опубликовано. Откройте его в приложении VK, чтобы запросить разрешение на сообщения.");
+            } else {
+                try {
+                    await window.vkBridge.send("VKWebAppAllowMessagesFromGroup", { group_id: Number(res.vk_group_id) });
+                    const dm = await api(`/api/admin/events/${eventId}/send-vk-announcement`, { method: "POST" });
+                    showToast(dm.sent
+                        ? "✅ Мероприятие опубликовано. Анонс отправлен вам в VK-сообщения."
+                        : dm.already_sent
+                            ? "✅ Мероприятие опубликовано. Анонс уже отправлялся вам в VK-сообщения."
+                            : "✅ Мероприятие опубликовано, но VK не принял анонс. Проверьте доступ к сообщениям сообщества.", !dm.sent && !dm.already_sent);
+                } catch (e) {
+                    showToast("✅ Мероприятие опубликовано в Билетере, но отправить анонс в личные сообщения не удалось. " + (e.message || "Разрешение не выдано."), true);
+                }
+            }
         } else {
             showToast(res.announced
                 ? `✅ Опубликовано${where}, анонс отправлен`

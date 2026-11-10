@@ -88,3 +88,24 @@ async def send_vk_ticket_dm(vk_user_id: str, text: str, group) -> bool:
     except VKAPIError as e:
         logger.error("Ошибка messages.send покупателю %s: %s", vk_user_id, e)
         return False
+
+
+async def send_vk_organizer_announcement_dm(vk_user_id: str, text: str, group) -> bool:
+    """Send a published event announcement to its VK organizer's own inbox."""
+    token = decrypt_token(group.community_token or "")
+    if not token:
+        logger.warning("Нет community token для VK-группы %s — DM анонса не отправлен", group.group_id)
+        return False
+    try:
+        await vk_api_call(
+            "messages.send",
+            token,
+            peer_id=int(vk_user_id),
+            message=text,
+            random_id=0,
+        )
+        logger.info("Анонс отправлен организатору VK %s от группы %s", vk_user_id, group.group_id)
+        return True
+    except VKAPIError as e:
+        logger.error("Ошибка отправки VK-анонса организатору %s: %s", vk_user_id, e)
+        return False

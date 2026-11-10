@@ -140,7 +140,7 @@ def test_vk_wall_story_and_personal_publication_paths_are_removed():
         assert forbidden not in APP_JS
         assert forbidden not in ROUTES
     assert "async function adminPublish(eventId)" in APP_JS
-    assert "Опубликовать в Билетере" in APP_JS
+    assert "Опубликовать и отправить анонс себе" in APP_JS
 
 
 def test_vk_community_widget_feature_is_removed():
@@ -163,6 +163,12 @@ def test_appjs_vk_ticket_dm_flow():
     assert "vk_group_id" in APP_JS
     assert "/send-vk" in APP_JS
     assert "Билет отправлен в личные сообщения сообщества" in APP_JS
+
+
+def test_appjs_vk_organizer_announcement_dm_flow():
+    assert "VKWebAppAllowMessagesFromGroup" in APP_JS
+    assert "/send-vk-announcement" in APP_JS
+    assert "Анонс отправлен вам в VK-сообщения" in APP_JS
 
 
 def test_appjs_invite_links_flow():

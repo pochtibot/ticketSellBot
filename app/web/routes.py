@@ -65,7 +65,11 @@ from app.web.dependencies import (
 )
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
-from app.web.vk_api import send_vk_ticket_dm, verify_group_token
+from app.web.vk_api import (
+    send_vk_organizer_announcement_dm,
+    send_vk_ticket_dm,
+    verify_group_token,
+)
 from app.web.vk_pay import (
     VK_PAY_NOTIFICATION_VERSION,
     build_notification_ack,
@@ -1817,6 +1821,11 @@ async def admin_publish_event(
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
             await event_svc.update(uid, is_published=True)
+            vk_group = None
+            if event.owner_user_id is not None:
+                group_svc = VKGroupService(session)
+                groups = await group_svc.list_vk_groups(event.owner_user_id)
+                vk_group = next((g for g in groups if g.community_token), None)
             await session.commit()
         return {
             "id": str(uid),
@@ -1824,6 +1833,7 @@ async def admin_publish_event(
             "announced": False,
             "platform": "vk",
             "publication_types": [],
+            "vk_group_id": vk_group.group_id if vk_group else None,
         }
 
     target_channel_id: UUID | None = None
@@ -1880,6 +1890,69 @@ async def admin_publish_event(
         "announced": announced,
         "dm_sent": dm_sent,
     }
+
+
+@router.post("/admin/events/{event_id}/send-vk-announcement")
+async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depends(get_current_user)):
+    """Send the published event announcement to its VK organizer's own inbox."""
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Доступно только в VK-приложении")
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if event.owner_user_id != current.user_id or not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Отправить анонс может только организатор")
+        if not event.is_published:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Сначала опубликуйте мероприятие в Билетере")
+
+        group_svc = VKGroupService(session)
+        groups = await group_svc.list_vk_groups(event.owner_user_id)
+        group = next((g for g in groups if g.community_token), None)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Подключите сообщество с ключом сообщений")
+
+        target_id = f"{group.group_id}:{current.telegram_user_id}"
+        existing = await event_svc.get_publication(uid, PlatformType.vk, "vk_organizer_dm", target_id)
+        if existing is not None and existing.status == "posted":
+            return {"sent": False, "already_sent": True, "group_id": group.group_id}
+
+        price = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
+        date_text = event.date.strftime("%d.%m.%Y %H:%M")
+        parts = [f"📢 Анонс мероприятия\n\n🎫 {event.title}"]
+        if event.description:
+            parts.append(event.description[:1800])
+        parts.extend([
+            f"📅 {date_text}",
+            f"📍 {event.location or 'Место уточняется'}",
+            f"💰 {'Бесплатно' if price <= 0 else f'{price:.0f} ₽'}",
+        ])
+        if settings.webapp_url:
+            separator = "&" if "?" in settings.webapp_url else "?"
+            parts.append(f"🎟 Открыть мероприятие: {settings.webapp_url}{separator}event_id={uid}")
+        sent = await send_vk_organizer_announcement_dm(
+            current.telegram_user_id,
+            "\n\n".join(parts),
+            group,
+        )
+        if sent:
+            await event_svc.add_publication(
+                event_id=uid,
+                platform=PlatformType.vk,
+                target_type="vk_organizer_dm",
+                target_id=target_id,
+                created_by=current.user_id,
+                status="posted",
+            )
+            await session.commit()
+
+    return {"sent": sent, "already_sent": False, "group_id": group.group_id}
 
 
 @router.get("/admin/events/{event_id}/publications")
