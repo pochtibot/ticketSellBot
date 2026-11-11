@@ -298,7 +298,8 @@ async function runAppStart() {
 
     // Check if opened with specific event_id
     const params = new URLSearchParams(window.location.search);
-    const eventId = params.get("event_id");
+    const fragmentParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    const eventId = params.get("event_id") || fragmentParams.get("event_id");
     const inviteCode = params.get("invite");
 
     if (inviteCode) {

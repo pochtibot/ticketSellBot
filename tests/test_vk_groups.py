@@ -133,9 +133,11 @@ async def test_send_vk_organizer_announcement_includes_keyboard_and_poster():
         "one_time": False,
         "buttons": [[{
             "action": {
-                "type": "open_link",
+                "type": "open_app",
                 "label": "Открыть мероприятие",
-                "link": "https://example.test/event",
+                "app_id": 54698875,
+                "owner_id": -7777777,
+                "hash": "event_id=event-1",
             },
         }]],
     }

@@ -71,6 +71,11 @@ def test_vk_connected_group_can_refresh_community_token_scopes():
     assert 'g.has_token ? "Обновить права" : "Выдать токен"' in APP_JS
 
 
+def test_vk_app_opens_event_from_launch_hash():
+    assert 'new URLSearchParams((window.location.hash || "").replace(/^#/, ""))' in APP_JS
+    assert 'params.get("event_id") || fragmentParams.get("event_id")' in APP_JS
+
+
 def test_appjs_has_linking_ui():
     assert "createVKLinkCode" in APP_JS
     assert "linkVKByCode" in APP_JS

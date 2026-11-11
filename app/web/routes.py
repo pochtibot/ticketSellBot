@@ -1957,10 +1957,8 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
         if len(description) > 700:
             description = description[:697].rsplit(" ", 1)[0] + "…"
         price_text = "Бесплатно" if price <= 0 else f"{price:.0f} ₽"
-        event_url = None
-        if settings.webapp_url:
-            separator = "&" if "?" in settings.webapp_url else "?"
-            event_url = f"{settings.webapp_url}{separator}event_id={uid}"
+        event_hash = f"event_id={uid}"
+        can_open_vk_app = bool(settings.vk_app_id)
         message_parts = [
             "📣 АНОНС ГОТОВ",
             "",
@@ -1972,21 +1970,23 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
         ]
         if description:
             message_parts.extend(["", description])
-        if event_url:
+        if can_open_vk_app:
             message_parts.extend(["", "Страница мероприятия — по кнопке ниже."])
         else:
-            message_parts.extend(["", "Откройте мероприятие в приложении Билетера."])
+            message_parts.extend(["", "Откройте мероприятие в приложении VK."])
         keyboard = {
             "inline": True,
             "one_time": False,
             "buttons": [[{
                 "action": {
-                    "type": "open_link",
+                    "type": "open_app",
                     "label": "Открыть мероприятие",
-                    "link": event_url,
+                    "app_id": settings.vk_app_id,
+                    "owner_id": -int(group.group_id),
+                    "hash": event_hash,
                 },
             }]],
-        } if event_url else None
+        } if can_open_vk_app else None
         sent = await send_vk_organizer_announcement_dm(
             current.telegram_user_id,
             "\n".join(message_parts),

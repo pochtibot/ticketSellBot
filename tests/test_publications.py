@@ -114,7 +114,7 @@ class TestPublishWeb:
         self, db_client, db_session, owner_event_vk_group, monkeypatch
     ):
         owner, event, group = owner_event_vk_group
-        monkeypatch.setattr("app.web.routes.settings.webapp_url", "https://example.test/vk-app")
+        monkeypatch.setattr("app.web.routes.settings.vk_app_id", 54698875)
         db_session.add(EventPoster(event_id=event.id, image_data=b"poster", content_type="image/jpeg"))
         await db_session.commit()
         from app.web.dependencies import CurrentUser, get_current_user
@@ -150,9 +150,11 @@ class TestPublishWeb:
         assert send_dm.await_args.kwargs["poster_data"] == b"poster"
         assert send_dm.await_args.kwargs["poster_content_type"] == "image/jpeg"
         button = keyboard["buttons"][0][0]
-        assert button["action"]["type"] == "open_link"
+        assert button["action"]["type"] == "open_app"
         assert button["action"]["label"] == "Открыть мероприятие"
-        assert button["action"]["link"] == f"https://example.test/vk-app?event_id={event.id}"
+        assert button["action"]["app_id"] == 54698875
+        assert button["action"]["owner_id"] == -int(group.group_id)
+        assert button["action"]["hash"] == f"event_id={event.id}"
         assert "color" not in button
         publications = await EventService(db_session).list_publications(event.id)
         assert len(publications) == 1
