@@ -153,6 +153,7 @@ class TestPublishWeb:
         assert button["action"]["type"] == "open_link"
         assert button["action"]["label"] == "Открыть мероприятие"
         assert button["action"]["link"] == f"https://example.test/vk-app?event_id={event.id}"
+        assert "color" not in button
         publications = await EventService(db_session).list_publications(event.id)
         assert len(publications) == 1
         assert publications[0].target_type == "vk_organizer_dm"

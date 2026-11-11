@@ -1985,7 +1985,6 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
                     "label": "Открыть мероприятие",
                     "link": event_url,
                 },
-                "color": "primary",
             }]],
         } if event_url else None
         sent = await send_vk_organizer_announcement_dm(

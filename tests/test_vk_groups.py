@@ -137,7 +137,6 @@ async def test_send_vk_organizer_announcement_includes_keyboard_and_poster():
                 "label": "Открыть мероприятие",
                 "link": "https://example.test/event",
             },
-            "color": "primary",
         }]],
     }
     with (
