@@ -5,6 +5,7 @@ Community token хранится зашифрованным и расшифро�
 
 import json
 import logging
+import secrets
 
 import httpx
 
@@ -105,7 +106,6 @@ async def send_vk_organizer_announcement_dm(
     if not token:
         logger.warning("Нет community token для VK-группы %s — DM анонса не отправлен", group.group_id)
         return False
-
     peer_id = int(vk_user_id)
     attachment = None
     if poster_data:
@@ -133,6 +133,94 @@ async def send_vk_organizer_announcement_dm(
     except VKAPIError as e:
         logger.error("Ошибка отправки VK-анонса организатору %s: %s", vk_user_id, e)
         return False
+
+
+async def get_vk_newsletter_users(group, *, intent: str = "promo_newsletter") -> list[str]:
+    """Return members subscribed to the requested VK community message intent."""
+    token = decrypt_token(group.community_token or "")
+    if not token:
+        raise VKAPIError("У сообщества нет ключа доступа к сообщениям")
+
+    users: list[str] = []
+    offset = 0
+    page_size = 1000
+    while True:
+        response = await vk_api_call(
+            "messages.getIntentUsers",
+            token,
+            intent=intent,
+            offset=offset,
+            count=page_size,
+        )
+        page = response.get("items", []) if isinstance(response, dict) else []
+        if not isinstance(page, list):
+            raise VKAPIError("VK вернул некорректный список подписчиков рассылки")
+        users.extend(str(user_id) for user_id in page if str(user_id).isdigit())
+        if len(page) < page_size:
+            break
+        offset += len(page)
+
+    # VK pagination can overlap while the subscription list changes.
+    return list(dict.fromkeys(users))
+
+
+async def send_vk_newsletter(
+    group,
+    user_ids: list[str],
+    text: str,
+    *,
+    intent: str = "promo_newsletter",
+    keyboard: dict | None = None,
+) -> tuple[int, int]:
+    """Send a VK community newsletter to explicit recipients in API-sized batches."""
+    token = decrypt_token(group.community_token or "")
+    if not token:
+        raise VKAPIError("У сообщества нет ключа доступа к сообщениям")
+
+    sent = 0
+    failed = 0
+    for start in range(0, len(user_ids), 100):
+        batch = user_ids[start : start + 100]
+        params = {
+            "user_ids": ",".join(batch),
+            "message": text,
+            "random_id": secrets.randbelow(2**31 - 1) + 1,
+            "intent": intent,
+        }
+        if keyboard:
+            params["keyboard"] = json.dumps(keyboard, ensure_ascii=False)
+        try:
+            response = await vk_api_call("messages.send", token, **params)
+        except (VKAPIError, httpx.HTTPError) as e:
+            logger.warning(
+                "Ошибка VK-рассылки для группы %s (пакет %d, %d получателей): %s",
+                group.group_id,
+                start // 100 + 1,
+                len(batch),
+                e,
+            )
+            failed += len(batch)
+            continue
+
+        items = response if isinstance(response, list) else None
+        if items is not None and len(items) == len(batch):
+            batch_failed = sum(
+                1 for item in items if isinstance(item, dict) and item.get("error")
+            )
+            failed += batch_failed
+            sent += len(batch) - batch_failed
+        else:
+            # A successful API envelope without per-recipient errors means VK
+            # accepted the whole request. Top-level API failures are raised above.
+            sent += len(batch)
+
+    logger.info(
+        "VK-рассылка сообщества %s завершена: отправлено %d, ошибок %d",
+        group.group_id,
+        sent,
+        failed,
+    )
+    return sent, failed
 
 
 async def _upload_message_photo(

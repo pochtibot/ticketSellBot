@@ -162,6 +162,54 @@ async def test_send_vk_organizer_announcement_includes_keyboard_and_poster():
     assert json.loads(api_call.await_args.kwargs["keyboard"]) == keyboard
 
 
+async def test_vk_newsletter_users_reads_all_pages_and_deduplicates():
+    from app.web.vk_api import get_vk_newsletter_users
+
+    group = SimpleNamespace(group_id="7777777", community_token="encrypted-token")
+    first_page = list(range(1, 1001))
+    with (
+        patch("app.web.vk_api.decrypt_token", return_value="community-token"),
+        patch(
+            "app.web.vk_api.vk_api_call",
+            new_callable=AsyncMock,
+            side_effect=[{"items": first_page}, {"items": [1000, 1001]}],
+        ) as api_call,
+    ):
+        users = await get_vk_newsletter_users(group)
+
+    assert users == [str(value) for value in range(1, 1002)]
+    assert api_call.await_count == 2
+    assert api_call.await_args_list[0].args == ("messages.getIntentUsers", "community-token")
+    assert api_call.await_args_list[0].kwargs == {
+        "intent": "promo_newsletter", "offset": 0, "count": 1000,
+    }
+    assert api_call.await_args_list[1].kwargs["offset"] == 1000
+
+
+async def test_vk_newsletter_sends_in_batches_and_counts_recipient_errors():
+    from app.web.vk_api import send_vk_newsletter
+
+    group = SimpleNamespace(group_id="7777777", community_token="encrypted-token")
+    user_ids = [str(value) for value in range(205)]
+
+    async def send_batch(method, token, **params):
+        recipients = params["user_ids"].split(",")
+        return [{"user_id": user_id, "error": {"error_code": 901}} for user_id in recipients[:1]] + [
+            {"user_id": user_id, "message_id": 1} for user_id in recipients[1:]
+        ]
+
+    with (
+        patch("app.web.vk_api.decrypt_token", return_value="community-token"),
+        patch("app.web.vk_api.vk_api_call", new_callable=AsyncMock, side_effect=send_batch) as api_call,
+    ):
+        sent, failed = await send_vk_newsletter(group, user_ids, "Event announcement")
+
+    assert (sent, failed) == (202, 3)
+    assert api_call.await_count == 3
+    assert [len(call.kwargs["user_ids"].split(",")) for call in api_call.await_args_list] == [100, 100, 5]
+    assert all(call.kwargs["intent"] == "promo_newsletter" for call in api_call.await_args_list)
+
+
 async def test_vk_message_poster_uses_documented_upload_flow():
     from app.web.vk_api import _upload_message_photo
 

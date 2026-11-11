@@ -221,7 +221,7 @@
 | # | Задача | Статус | Дата | Коммит |
 |---|--------|--------|------|--------|
 | 204 | Env: `VK_TOKEN_ENCRYPTION_KEY` (Fernet) — добавлен в GitHub Secrets и прокинут в `.env.telegram` через `deploy.yml` (для шифрования community token VK-групп) | ✅ done | 2026-08-22 | — (готово к коммиту) |
-| 205 | Feat: `VKWebAppGetCommunityToken` во фронтенде — подключение VK-группы и community token для функций сообщества; текущие scopes `messages,manage` (права публикации/виджета удалены) | ✅ done | 2026-08-22; scopes очищены 2026-11-10 | — |
+| 205 | Feat: `VKWebAppGetCommunityToken` во фронтенде — подключение VK-группы и community token; запрашиваются scopes `stories,photos,app_widget,messages,docs,manage`; используется для сообщений организатору и опциональной отправки афиши | ✅ done | 2026-08-22; права обновлены 2026-11-10 | — |
 | 206 | Infra: CORS — добавлен `https://m.vk.com` (мобильный веб-клиент VK Mini App) | ✅ done | 2026-08-22 | — (готово к коммиту) |
 | 207 | Perf: кэш-бюст `app.js?v=3 → ?v=4` в `index.html` и `vk-app.html` (после правок JS) | ✅ done | 2026-08-22 | — (готово к коммиту) |
 | 208 | Ручные шаги в кабинете VK: тип приложения «Встраиваемое → VK App», адрес `https://pochtibot.online/vk-app`, установка приложения в группу, публикация/модерация | ⏳ ожидает владельца | 2026-08-22 | — |

@@ -171,6 +171,13 @@ def test_appjs_vk_ticket_dm_flow():
 def test_appjs_vk_organizer_announcement_dm_flow():
     assert "VKWebAppAllowMessagesFromGroup" in APP_JS
     assert "/send-vk-announcement" in APP_JS
+
+
+def test_appjs_vk_newsletter_broadcast_requires_confirmation_and_uses_selected_group():
+    assert "vk-broadcast-audience" in APP_JS
+    assert "vk-broadcast" in APP_JS
+    assert "подписчикам рассылки" in APP_JS
+    assert 'onclick="adminVkBroadcast(' in APP_JS
     assert "Анонс отправлен вам в VK-сообщения" in APP_JS
 
 
