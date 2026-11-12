@@ -67,14 +67,17 @@ def test_vk_direct_wall_post_uses_user_token_and_logs_steps_without_logging_toke
     wall_post = APP_JS.split("async function adminVkWallApiPost(eventId)", 1)[1].split(
         "function getVKCommunityTokenMethod", 1
     )[0]
-    assert 'method: "wall.post"' in wall_post
-    assert '"VKWebAppCallAPIMethod"' in wall_post
-    assert "owner_id: -Number(groupId)" in wall_post
-    assert "from_group: 1" in wall_post
+    assert 'api("/api/me/vk-wall-post"' in wall_post
     assert "access_token: authToken" in wall_post
+    assert 'method: "wall.post"' not in wall_post
+    assert '"VKWebAppCallAPIMethod"' not in wall_post
     for step in ("publish_start", "group_validate", "auth_token_request", "auth_token_validate", "wall_post_request", "wall_post_response", "publish_error"):
         assert f'step: "{step}"' in wall_post
     assert "access_token" not in wall_post.split("logVKWallPostStep", 1)[0]
+    assert '"event_type": "vk.wall_post_proxy"' in ROUTES
+    assert "body.access_token" in ROUTES
+    assert "owner_id=-int(body.group_id)" in ROUTES
+    assert "from_group=1" in ROUTES
 
 
 def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community():

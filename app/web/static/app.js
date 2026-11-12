@@ -2546,9 +2546,11 @@ function getVKWallErrorDetails(error) {
         return "";
     };
     const errorType = find(["error_type"]);
-    const code = find(["error_code", "code"]);
     const message = find(["error_reason", "error_description", "error_msg", "description", "message"])
         || (typeof error === "string" ? error : "Неизвестная ошибка VK Bridge");
+    const code = find(["error_code", "code"])
+        || (message.match(/VK API(?: error)?\s*(\d+)\s*:/i) || [])[1]
+        || "";
     const safeMessage = String(message)
         .replace(/\s+/g, " ")
         .replace(/(access_token|token)([\s"'=:\u0026]+)[^&\s,"}]+/gi, "$1$2[REDACTED]")
@@ -3255,21 +3257,20 @@ async function adminVkWallApiPost(eventId) {
         if (state.vkAppId) {
             messageParts.push("", `Билеты и подробности: https://vk.com/app${encodeURIComponent(state.vkAppId)}#event_id=${encodeURIComponent(eventId)}`);
         }
-        const params = {
-            owner_id: -Number(groupId),
-            from_group: 1,
-            message: messageParts.join("\n"),
-            access_token: authToken,
-            v: "5.199",
-        };
         currentStep = "wall_post_request";
         await logVKWallPostStep({ ...baseLog, step: "wall_post_request", status: "started" });
-        const result = await vkBridgeRequest("VKWebAppCallAPIMethod", { method: "wall.post", params });
-        if (result?.error || result?.response?.error) {
-            throw result.error || result.response.error;
-        }
-        const response = result?.response;
-        const postId = Number(typeof response === "object" ? (response.post_id ?? response.postId) : response);
+        const result = await api("/api/me/vk-wall-post", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                operation_id: operationId,
+                event_id: String(eventId),
+                group_id: String(groupId),
+                access_token: authToken,
+                message: messageParts.join("\n"),
+            }),
+        });
+        const postId = Number(result && result.post_id);
         if (!Number.isSafeInteger(postId) || postId <= 0) {
             const details = getVKWallErrorDetails(result);
             throw Object.assign(new Error(details.error_message || "VK не вернул ID созданной записи"), {

@@ -18,6 +18,11 @@ _API_VERSION = "5.199"
 class VKAPIError(Exception):
     """Ошибка VK API."""
 
+    def __init__(self, message: str, *, code: int | None = None, api_message: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.api_message = api_message or message
+
 
 async def vk_api_call(method: str, token: str, **params) -> dict:
     """Вызвать метод VK API с access_token."""
@@ -29,7 +34,9 @@ async def vk_api_call(method: str, token: str, **params) -> dict:
     if "error" in payload:
         err = payload["error"]
         raise VKAPIError(
-            f"VK API {method} error {err.get('error_code')}: {err.get('error_msg')}"
+            f"VK API {method} error {err.get('error_code')}: {err.get('error_msg')}",
+            code=err.get("error_code"),
+            api_message=str(err.get("error_msg") or "VK API error"),
         )
     return payload.get("response", {})
 

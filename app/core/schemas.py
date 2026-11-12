@@ -278,6 +278,15 @@ class VKWallPublishDiagnosticIn(BaseModel):
     error_message: Optional[str] = Field(default=None, max_length=500)
 
 
+class VKWallPostProxyIn(BaseModel):
+    """One-shot request to proxy a wall post through the backend."""
+    operation_id: str = Field(min_length=1, max_length=64)
+    event_id: UUID
+    group_id: str = Field(min_length=1, max_length=32, pattern=r"^\d+$")
+    access_token: str = Field(min_length=1, max_length=8192, repr=False)
+    message: str = Field(min_length=1, max_length=5000)
+
+
 class PublishIn(BaseModel):
     """Публикация мероприятия в Telegram."""
     channel_id: Optional[UUID] = None

@@ -43,6 +43,7 @@ from app.core.schemas import (
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
     VKWallPublishDiagnosticIn,
+    VKWallPostProxyIn,
     PromoCodeCreate,
     BuyIn,
     PriceRangesUpdate,
@@ -1382,6 +1383,113 @@ async def log_vk_wall_post_diagnostic(
         "platform": current.platform.value,
     })
     return {"accepted": True}
+
+
+@router.post("/me/vk-wall-post")
+async def proxy_vk_wall_post(
+    body: VKWallPostProxyIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Proxy one authorized wall.post call from VK Mini App to VK API.
+
+    The user's short-lived access token is used for this request only; it is
+    never stored or included in logs. The event and destination community are
+    checked against the authenticated organizer before the VK call.
+    """
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Доступно только из VK-приложения")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(body.event_id)
+        if event is None or event.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к мероприятию")
+        if not event.is_active or not event.is_published:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Опубликовать можно только активное мероприятие")
+
+        group_svc = VKGroupService(session)
+        connected_groups = await group_svc.list_vk_groups(current.user_id)
+        group = next((item for item in connected_groups if item.group_id == body.group_id), None)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Сообщество не подключено к вашему кабинету")
+
+    try:
+        response = await vk_api_call(
+            "wall.post",
+            body.access_token,
+            owner_id=-int(body.group_id),
+            from_group=1,
+            message=body.message,
+        )
+    except VKAPIError as exc:
+        safe_message = re.sub(
+            r"(?i)(access_token|token)([\s\"'=:\u0026]+)[^&\s,\"}]+",
+            r"\1\2[REDACTED]",
+            str(exc.api_message),
+        )[:500]
+        logger.warning("", extra={
+            "event_type": "vk.wall_post_proxy",
+            "operation_id": body.operation_id,
+            "status": "failed",
+            "event_id": str(body.event_id),
+            "group_id": body.group_id,
+            "error_code": str(exc.code) if exc.code is not None else None,
+            "error_message": safe_message,
+            "user_id": str(current.user_id),
+            "platform": current.platform.value,
+        })
+        code = f" {exc.code}" if exc.code is not None else ""
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"VK API{code}: {safe_message}",
+        ) from exc
+    except Exception as exc:
+        logger.warning("", extra={
+            "event_type": "vk.wall_post_proxy",
+            "operation_id": body.operation_id,
+            "status": "failed",
+            "event_id": str(body.event_id),
+            "group_id": body.group_id,
+            "error_code": "transport_error",
+            "user_id": str(current.user_id),
+            "platform": current.platform.value,
+        })
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось связаться с VK API") from exc
+
+    if isinstance(response, dict):
+        post_id = response.get("post_id") or response.get("postId")
+    else:
+        post_id = response
+    try:
+        post_id = int(post_id)
+    except (TypeError, ValueError):
+        post_id = 0
+    if post_id <= 0:
+        logger.warning("", extra={
+            "event_type": "vk.wall_post_proxy",
+            "operation_id": body.operation_id,
+            "status": "failed",
+            "event_id": str(body.event_id),
+            "group_id": body.group_id,
+            "error_code": "post_id_missing",
+            "user_id": str(current.user_id),
+            "platform": current.platform.value,
+        })
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK не вернул ID опубликованной записи")
+
+    logger.info("", extra={
+        "event_type": "vk.wall_post_proxy",
+        "operation_id": body.operation_id,
+        "status": "success",
+        "event_id": str(body.event_id),
+        "group_id": body.group_id,
+        "post_id": post_id,
+        "user_id": str(current.user_id),
+        "platform": current.platform.value,
+    })
+    return {"post_id": post_id}
 
 
 @router.post("/me/vk-groups", status_code=status.HTTP_201_CREATED)
