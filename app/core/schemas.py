@@ -261,11 +261,6 @@ class VKGroupRegisterIn(BaseModel):
     community_token: Optional[str] = None  # от VKWebAppGetCommunityToken, шифруется
 
 
-class VKEventBroadcastIn(BaseModel):
-    """Запуск анонса мероприятия для подписчиков рассылки VK-сообщества."""
-    group_id: str = Field(min_length=1, max_length=20)
-
-
 class PublishIn(BaseModel):
     """Публикация мероприятия в Telegram."""
     channel_id: Optional[UUID] = None

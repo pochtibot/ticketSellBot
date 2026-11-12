@@ -1891,23 +1891,19 @@ async function showAdminEventDetail(eventId) {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
         let stats = null, tickets = null, invites = [], promos = [], priceRanges = [];
-        let vkGroups = [];
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
         try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
-        if (isVKMode()) {
-            try { vkGroups = await api("/api/me/vk-groups"); } catch (e) { /* рассылка недоступна */ }
-        }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges, vkGroups);
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges, vkGroups = []) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
@@ -2009,20 +2005,6 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 </div>`).join('')}</div>`}
     `;
 
-    const mailGroups = (vkGroups || []).filter(group => group.has_token);
-    const vkBroadcastHtml = isVKMode() && event.is_published && event.is_active
-        ? (mailGroups.length ? `
-            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px">
-                <label class="form-label" for="vk_broadcast_group_${event.id}" style="margin:0">Сообщество</label>
-                <select class="form-input" id="vk_broadcast_group_${event.id}" style="width:auto;min-width:180px">
-                    ${mailGroups.map(group => `<option value="${escapeHtml(group.group_id)}">${escapeHtml(group.title || ('ID ' + group.group_id))}</option>`).join('')}
-                </select>
-                <button class="btn btn-sm btn-secondary" onclick="adminVkBroadcast('${event.id}')">📨 Разослать анонс</button>
-            </div>
-            <p class="hint">Рассылка пойдёт подписчикам на рекламные сообщения этого сообщества, не всем участникам группы.</p>`
-        : '<p class="hint">Для рассылки подключите сообщество с ключом доступа к сообщениям.</p>')
-        : '';
-
     container.innerHTML = `
         ${(event.has_media || event.media_file_id) ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="Афиша">` : ''}
         <h2>${escapeHtml(event.title)}</h2>
@@ -2052,7 +2034,6 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">${isVKMode() ? '🌐 Опубликовать и отправить анонс себе' : '📢 Опубликовать'}</button>
             </div>
             ${isVKMode() ? '<span class="hint">Анонс придёт в ваши VK-сообщения от подключённого сообщества после разрешения.</span>' : ''}
-            ${vkBroadcastHtml}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -2293,37 +2274,6 @@ async function adminRepost(eventId) {
         const res = await api(`/api/admin/events/${eventId}/repost`, { method: "POST" });
         showToast(res.announced ? "✅ Анонс отправлен" : "⚠️ Анонс не отправлен");
     } catch (e) { showToast(e.message || "Ошибка", true); }
-}
-
-async function adminVkBroadcast(eventId) {
-    const groupSelect = document.getElementById(`vk_broadcast_group_${eventId}`);
-    const groupId = groupSelect?.value;
-    if (!groupId) { showToast("Выберите подключённое сообщество", true); return; }
-    try {
-        const audience = await api(`/api/admin/events/${eventId}/vk-broadcast-audience?group_id=${encodeURIComponent(groupId)}`);
-        if (!audience.subscribers) {
-            showToast("В этой рассылке сообщества пока нет подписчиков", true);
-            return;
-        }
-        const title = state.currentAdminEvent?.title || "мероприятия";
-        const confirmed = await tgConfirm(
-            `Отправить анонс «${title}» ${audience.subscribers} подписчикам рассылки сообщества «${audience.group_title || groupId}»?`,
-            "Отправить",
-            "Отмена",
-        );
-        if (!confirmed) return;
-        showLoading();
-        const result = await api(`/api/admin/events/${eventId}/vk-broadcast`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: groupId }),
-        });
-        hideLoading();
-        showToast(`Рассылка завершена: доставлено ${result.sent} из ${result.total}${result.failed ? `, ошибок ${result.failed}` : ""}`, result.failed > 0);
-    } catch (e) {
-        hideLoading();
-        showToast(e.message || "Не удалось выполнить VK-рассылку", true);
-    }
 }
 
 async function adminToggle(eventId) {

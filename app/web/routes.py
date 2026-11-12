@@ -41,7 +41,6 @@ from app.core.schemas import (
     SubscribeMeIn,
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
-    VKEventBroadcastIn,
     PromoCodeCreate,
     BuyIn,
     PriceRangesUpdate,
@@ -69,8 +68,6 @@ from app.web.announce import post_event_announcement, send_announcement_dm, send
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
     VKAPIError,
-    get_vk_newsletter_users,
-    send_vk_newsletter,
     send_vk_organizer_announcement_dm,
     send_vk_ticket_dm,
     verify_group_token,
@@ -2012,131 +2009,6 @@ async def send_vk_event_announcement(event_id: str, current: CurrentUser = Depen
             await session.commit()
 
     return {"sent": sent, "group_id": group.group_id}
-
-
-async def _get_vk_broadcast_context(session, event_id: str, group_id: str, current: CurrentUser):
-    if current.platform is not PlatformType.vk:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Доступно только в VK-приложении")
-    try:
-        uid = UUID(event_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
-
-    event_svc = EventService(session)
-    event = await event_svc.get_by_id(uid)
-    if event is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
-    if event.owner_user_id != current.user_id or not _can_manage_event(current, event):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Рассылку может отправить только организатор")
-    if not event.is_published or not event.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Сначала опубликуйте и включите мероприятие в Билетере",
-        )
-
-    normalized_group_id = group_id.strip().lstrip("-")
-    if not normalized_group_id.isascii() or not normalized_group_id.isdigit() or int(normalized_group_id) <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID сообщества")
-    groups = await VKGroupService(session).list_vk_groups(current.user_id)
-    group = next((g for g in groups if g.group_id == normalized_group_id), None)
-    if group is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Подключённое сообщество не найдено")
-    if not group.community_token:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="У сообщества нет ключа с доступом к сообщениям",
-        )
-    return event_svc, event, group
-
-
-@router.get("/admin/events/{event_id}/vk-broadcast-audience")
-async def get_vk_event_broadcast_audience(
-    event_id: str,
-    group_id: str,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Preview the number of community newsletter subscribers before sending."""
-    async with async_session_factory() as session:
-        _event_svc, _event, group = await _get_vk_broadcast_context(session, event_id, group_id, current)
-        try:
-            users = await get_vk_newsletter_users(group)
-        except (VKAPIError, httpx.HTTPError) as e:
-            logger.warning("Не удалось получить аудиторию VK-рассылки группы %s: %s", group.group_id, e)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="VK не вернул подписчиков рассылки. Проверьте, что рассылка настроена в сообществе и ключ имеет право messages.",
-            ) from e
-
-    return {
-        "group_id": group.group_id,
-        "group_title": group.title,
-        "intent": "promo_newsletter",
-        "subscribers": len(users),
-    }
-
-
-@router.post("/admin/events/{event_id}/vk-broadcast")
-async def send_vk_event_broadcast(
-    event_id: str,
-    body: VKEventBroadcastIn,
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Send an event announcement to users subscribed to this community's promotional newsletter."""
-    async with async_session_factory() as session:
-        event_svc, event, group = await _get_vk_broadcast_context(session, event_id, body.group_id, current)
-        try:
-            user_ids = await get_vk_newsletter_users(group)
-        except (VKAPIError, httpx.HTTPError) as e:
-            logger.warning("Не удалось получить аудиторию VK-рассылки группы %s: %s", group.group_id, e)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="VK не вернул подписчиков рассылки. Проверьте настройки рассылки сообщества и права ключа.",
-            ) from e
-
-        if not user_ids:
-            return {"sent": 0, "failed": 0, "total": 0, "group_id": group.group_id}
-
-        price = float(await event_svc.effective_price_at(event, datetime.now(timezone.utc)))
-        description = " ".join((event.description or "").split())
-        if len(description) > 700:
-            description = description[:697].rsplit(" ", 1)[0] + "…"
-        message_parts = [
-            "📣 АНОНС МЕРОПРИЯТИЯ",
-            "",
-            f"🎟 {event.title.strip()}",
-            "",
-            f"📅 {event.date.strftime('%d.%m.%Y %H:%M')}",
-            f"📍 {event.location or 'Место уточняется'}",
-            f"💳 {'Бесплатно' if price <= 0 else f'{price:.0f} ₽'}",
-        ]
-        if description:
-            message_parts.extend(["", description])
-
-        keyboard = None
-        if settings.vk_app_id:
-            keyboard = {
-                "inline": True,
-                "one_time": False,
-                "buttons": [[{
-                    "action": {
-                        "type": "open_app",
-                        "label": "Открыть мероприятие",
-                        "app_id": settings.vk_app_id,
-                        "owner_id": -int(group.group_id),
-                        "hash": f"event_id={event.id}",
-                    },
-                }]],
-            }
-
-        sent, failed = await send_vk_newsletter(
-            group,
-            user_ids,
-            "\n".join(message_parts),
-            intent="promo_newsletter",
-            keyboard=keyboard,
-        )
-
-    return {"sent": sent, "failed": failed, "total": len(user_ids), "group_id": group.group_id}
 
 
 @router.get("/admin/events/{event_id}/publications")
