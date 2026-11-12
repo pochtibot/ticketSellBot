@@ -1891,14 +1891,36 @@ async function showAdminEventDetail(eventId) {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
         let stats = null, tickets = null, invites = [], promos = [], priceRanges = [];
-        let vkGroups = [];
+        let vkGroups = null;
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
         try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
         if (isVKMode()) {
-            try { vkGroups = await api("/api/me/vk-groups"); } catch (e) { /* публикация на стене недоступна */ }
+            const operationId = createVKWallOperationId();
+            try {
+                vkGroups = await api("/api/me/vk-groups");
+                if (!Array.isArray(vkGroups)) throw new Error("Сервер вернул некорректный список сообществ");
+                await logVKWallPostStep({
+                    operation_id: operationId,
+                    step: "group_list_load",
+                    status: "success",
+                    event_id: String(eventId),
+                    group_count: vkGroups.length,
+                });
+            } catch (e) {
+                await logVKWallPostStep({
+                    operation_id: operationId,
+                    step: "group_list_load",
+                    status: "failed",
+                    event_id: String(eventId),
+                    ...getVKWallErrorDetails(e),
+                });
+                showToast(`Не удалось проверить подключённые сообщества: ${getVKWallErrorDetails(e).error_message}`, true);
+            }
+        } else {
+            vkGroups = [];
         }
         renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges, vkGroups);
     } catch (err) {
@@ -1913,7 +1935,8 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
     invites = invites || [];
     promos = promos || [];
     priceRanges = priceRanges || [];
-    vkGroups = vkGroups || [];
+    const vkGroupsLoaded = Array.isArray(vkGroups);
+    vkGroups = vkGroupsLoaded ? vkGroups : [];
 
     const statsHtml = stats ? `
         <div class="stat-grid">
@@ -2021,7 +2044,9 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 <button class="btn btn-sm btn-secondary" onclick="adminVkWallTextPost('${event.id}')">Опубликовать текстовый анонс на стене</button>
             </div>
             <p class="hint">Публикация будет сделана от имени сообщества. VK запросит пользовательский доступ с правом wall.</p>`
-        : '<p class="hint">Подключите сообщество в кабинете, чтобы опубликовать анонс на его стене.</p>')
+        : (vkGroupsLoaded
+            ? '<p class="hint">Список подключённых сообществ пуст. Откройте «Мои сообщества», подключите сообщество и вернитесь к мероприятию.</p><button class="btn btn-sm btn-secondary" onclick="showMyVKGroups()">Открыть мои сообщества</button>'
+            : '<p class="hint">Не удалось загрузить список подключённых сообществ. Обновите страницу мероприятия.</p>'))
         : '';
 
     container.innerHTML = `
@@ -2297,21 +2322,113 @@ async function adminRepost(eventId) {
 }
 
 async function adminVkWallTextPost(eventId) {
-    const groupSelect = document.getElementById(`vk_wall_group_${eventId}`);
-    const groupId = groupSelect?.value;
+    const operationId = createVKWallOperationId();
     const event = state.currentAdminEvent;
-    if (!groupId || !/^\d+$/.test(groupId)) {
-        showToast("Выберите подключённое сообщество", true);
+    await logVKWallPostStep({
+        operation_id: operationId,
+        step: "publish_start",
+        status: "started",
+        event_id: String(eventId),
+    });
+
+    // Перечитываем список при каждом нажатии, чтобы не полагаться на устаревший экран.
+    let currentGroups;
+    try {
+        currentGroups = await api("/api/me/vk-groups");
+        if (!Array.isArray(currentGroups)) throw new Error("Сервер вернул некорректный список сообществ");
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "group_list_refresh",
+            status: "success",
+            event_id: String(eventId),
+            group_count: currentGroups.length,
+        });
+    } catch (e) {
+        const details = getVKWallErrorDetails(e);
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "group_list_refresh",
+            status: "failed",
+            event_id: String(eventId),
+            ...details,
+        });
+        showToast(`Не удалось проверить подключённые сообщества: ${details.error_message}`, true);
         return;
     }
+
+    const groupSelect = document.getElementById(`vk_wall_group_${eventId}`);
+    const groupId = groupSelect?.value;
+    if (currentGroups.length === 0) {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "group_validate",
+            status: "failed",
+            event_id: String(eventId),
+            group_count: 0,
+            error_code: "empty_group_list",
+            error_message: "На момент публикации список подключённых сообществ пуст",
+        });
+        showToast("Список подключённых сообществ пуст. Подключите сообщество в разделе «Мои сообщества» и повторите попытку.", true);
+        return;
+    }
+    if (!groupId || !/^\d+$/.test(groupId) || !currentGroups.some(group => String(group.group_id) === String(groupId))) {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "group_validate",
+            status: "failed",
+            event_id: String(eventId),
+            group_id: groupId ? String(groupId) : null,
+            group_count: currentGroups.length,
+            error_code: "selected_group_missing",
+            error_message: "Выбранное сообщество отсутствует в актуальном списке подключённых сообществ",
+        });
+        showToast("Выбранное сообщество не найдено среди подключённых. Обновите страницу мероприятия.", true);
+        return;
+    }
+    await logVKWallPostStep({
+        operation_id: operationId,
+        step: "group_validate",
+        status: "success",
+        event_id: String(eventId),
+        group_id: String(groupId),
+        group_count: currentGroups.length,
+    });
     if (!event || String(event.id) !== String(eventId)) {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "publish_start",
+            status: "failed",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+            error_code: "event_not_loaded",
+            error_message: "Не удалось загрузить мероприятие",
+        });
         showToast("Не удалось загрузить мероприятие", true);
         return;
     }
     if (!window.vkBridge) {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "bridge_check",
+            status: "failed",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+            error_code: "vk_bridge_unavailable",
+            error_message: "VK Bridge недоступен",
+        });
         showToast("Откройте мероприятие в приложении VK, чтобы запросить пользовательский ключ", true);
         return;
     }
+    await logVKWallPostStep({
+        operation_id: operationId,
+        step: "bridge_check",
+        status: "success",
+        event_id: String(eventId),
+        group_id: String(groupId),
+        group_count: currentGroups.length,
+    });
 
     const title = String(event.title || "Мероприятие").trim();
     const price = Number(event.price || 0);
@@ -2326,11 +2443,56 @@ async function adminVkWallTextPost(eventId) {
     const description = String(event.description || "").replace(/\s+/g, " ").trim();
     if (description) messageParts.push("", description.slice(0, 700));
     const message = messageParts.join("\n");
-    if (!(await tgConfirm(
-        `Опубликовать текстовый анонс «${title}» на стене сообщества ${groupId}?`,
-        "Опубликовать",
-        "Отмена",
-    ))) return;
+    let confirmed;
+    try {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "confirm",
+            status: "started",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+        });
+        confirmed = await tgConfirm(
+            `Опубликовать текстовый анонс «${title}» на стене сообщества ${groupId}?`,
+            "Опубликовать",
+            "Отмена",
+        );
+    } catch (e) {
+        const details = getVKWallErrorDetails(e);
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "confirm",
+            status: "failed",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+            ...details,
+        });
+        showToast(`Не удалось подтвердить публикацию: ${details.error_message}`, true);
+        return;
+    }
+    if (!confirmed) {
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "confirm",
+            status: "skipped",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+            error_code: "user_cancelled",
+            error_message: "Пользователь отменил подтверждение публикации",
+        });
+        return;
+    }
+    await logVKWallPostStep({
+        operation_id: operationId,
+        step: "confirm",
+        status: "success",
+        event_id: String(eventId),
+        group_id: String(groupId),
+        group_count: currentGroups.length,
+    });
 
     try {
         showLoading();
@@ -2338,34 +2500,196 @@ async function adminVkWallTextPost(eventId) {
         if (!Number.isSafeInteger(appId) || appId <= 0) {
             throw new Error("Не удалось определить ID приложения. Перезапустите его.");
         }
-        const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
-            app_id: appId,
-            scope: "wall",
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "auth_token_request",
+            status: "started",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
         });
-        if (!auth || !auth.access_token) throw new Error("VK не вернул пользовательский ключ");
+        let auth;
+        try {
+            auth = await vkBridgeRequest("VKWebAppGetAuthToken", { app_id: appId, scope: "wall" });
+        } catch (e) {
+            const details = getVKWallErrorDetails(e);
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "auth_token_request",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                ...details,
+            });
+            throw new Error(`Не удалось запросить пользовательский ключ VK: ${details.error_message}`);
+        }
+        if (!auth || !auth.access_token) {
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "auth_token_request",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                error_code: "access_token_missing",
+                error_message: "VK не вернул пользовательский ключ",
+            });
+            throw new Error("VK не вернул пользовательский ключ");
+        }
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "auth_token_request",
+            status: "success",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+        });
         const grantedScopes = String(auth.scope || "").split(",").map(scope => scope.trim()).filter(Boolean);
-        if (!grantedScopes.includes("wall")) throw new Error("VK не предоставил право wall");
-
-        const result = await vkBridgeRequest("VKWebAppCallAPIMethod", {
-            method: "wall.post",
-            params: {
-                access_token: auth.access_token,
-                v: "5.199",
-                owner_id: -Number(groupId),
-                from_group: 1,
-                message,
-            },
+        if (!grantedScopes.includes("wall")) {
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "auth_token_validate",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                error_code: "wall_scope_missing",
+                error_message: "В выданном ключе отсутствует право wall",
+            });
+            throw new Error("VK не предоставил право wall");
+        }
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "auth_token_validate",
+            status: "success",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
         });
+
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "wall_post_request",
+            status: "started",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+        });
+        let result;
+        try {
+            result = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+                method: "wall.post",
+                params: {
+                    access_token: auth.access_token,
+                    v: "5.199",
+                    owner_id: -Number(groupId),
+                    from_group: 1,
+                    message,
+                },
+            });
+        } catch (e) {
+            const details = getVKWallErrorDetails(e);
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "wall_post_request",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                ...details,
+            });
+            throw new Error(`VK отклонил wall.post: ${details.error_message}`);
+        }
+        const apiError = result?.error || result?.response?.error;
+        if (apiError) {
+            const details = getVKWallErrorDetails(apiError);
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "wall_post_request",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                ...details,
+            });
+            throw new Error(`VK отклонил wall.post${details.error_code ? ` (${details.error_code})` : ""}: ${details.error_message}`);
+        }
         const response = result && result.response;
         const postId = Number(response && (response.post_id || response));
         if (!Number.isSafeInteger(postId) || postId <= 0) {
-            throw new Error("VK не вернул ID созданной записи");
+            const details = getVKWallErrorDetails(result);
+            await logVKWallPostStep({
+                operation_id: operationId,
+                step: "wall_post_response",
+                status: "failed",
+                event_id: String(eventId),
+                group_id: String(groupId),
+                group_count: currentGroups.length,
+                ...details,
+                error_code: details.error_code || "post_id_missing",
+                error_message: details.error_message || "VK вернул ответ без ID созданной записи",
+            });
+            throw new Error(details.error_message || "VK не вернул ID созданной записи");
         }
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "wall_post_response",
+            status: "success",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+        });
         hideLoading();
         showToast(`Текстовый анонс опубликован на стене сообщества. ID записи: ${postId}`);
     } catch (e) {
         hideLoading();
-        showToast(e.message || "Не удалось опубликовать анонс на стене сообщества", true);
+        const details = getVKWallErrorDetails(e);
+        await logVKWallPostStep({
+            operation_id: operationId,
+            step: "publish_error",
+            status: "failed",
+            event_id: String(eventId),
+            group_id: String(groupId),
+            group_count: currentGroups.length,
+            ...details,
+        });
+        showToast(details.error_message || "Не удалось опубликовать анонс на стене сообщества", true);
+    }
+}
+
+function createVKWallOperationId() {
+    try { return crypto.randomUUID(); }
+    catch (_) { return `vk-wall-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
+}
+
+function getVKWallErrorDetails(error) {
+    const source = error?.error_data || error?.data || error?.error || error;
+    const code = source?.error_code ?? source?.code ?? error?.error_code ?? error?.code;
+    const message = source?.error_msg || source?.message || error?.message || String(error || "Неизвестная ошибка");
+    return {
+        error_code: code == null ? "client_error" : String(code).slice(0, 64),
+        error_message: String(message)
+            .replace(/\s+/g, " ")
+            .replace(/(access_token|token)([\s"'=:\u0026]+)[^&\s,"}]+/gi, "$1$2[REDACTED]")
+            .slice(0, 500),
+    };
+}
+
+async function logVKWallPostStep(details) {
+    try {
+        await api("/api/me/vk-wall-post-diagnostics", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(details),
+        });
+    } catch (e) {
+        // Не прерываем публикацию, если недоступен только канал диагностики.
+        console.warn("VK wall publication diagnostic could not be saved", {
+            operationId: details.operation_id,
+            step: details.step,
+            error: e?.message,
+        });
     }
 }
 

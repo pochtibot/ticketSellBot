@@ -261,6 +261,22 @@ class VKGroupRegisterIn(BaseModel):
     community_token: Optional[str] = None  # от VKWebAppGetCommunityToken, шифруется
 
 
+class VKWallPublishDiagnosticIn(BaseModel):
+    """Безопасная диагностика этапов публикации в VK; ключи в модель не входят."""
+    operation_id: str = Field(min_length=1, max_length=64)
+    step: Literal[
+        "group_list_load", "publish_start", "publish_error", "group_list_refresh", "group_validate",
+        "confirm", "bridge_check", "auth_token_request", "auth_token_validate",
+        "wall_post_request", "wall_post_response",
+    ]
+    status: Literal["started", "success", "failed", "skipped"]
+    event_id: Optional[str] = Field(default=None, max_length=64)
+    group_id: Optional[str] = Field(default=None, max_length=32)
+    group_count: Optional[int] = Field(default=None, ge=0, le=10000)
+    error_code: Optional[str] = Field(default=None, max_length=64)
+    error_message: Optional[str] = Field(default=None, max_length=500)
+
+
 class PublishIn(BaseModel):
     """Публикация мероприятия в Telegram."""
     channel_id: Optional[UUID] = None

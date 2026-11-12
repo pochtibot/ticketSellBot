@@ -60,6 +60,41 @@ def _fake_async_session_factory():
     return _SessionContext
 
 
+def test_vk_wall_post_diagnostic_records_safe_step(client):
+    from app.core.models import PlatformType
+    from app.web.dependencies import CurrentUser, get_current_user
+
+    user = CurrentUser(
+        user_id=_UUID(USER_ID),
+        telegram_user_id="5305539",
+        name=None,
+        is_super_admin=False,
+        platform=PlatformType.vk,
+    )
+    client.app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        with patch("app.web.routes.logger.info") as log_info:
+            response = client.post(
+                "/api/me/vk-wall-post-diagnostics",
+                headers={"X-Skip-Auth": "1"},
+                json={
+                    "operation_id": "diagnostic-test-1",
+                    "step": "group_list_refresh",
+                    "status": "success",
+                    "event_id": EVENT_ID,
+                    "group_count": 0,
+                    "error_message": "access_token=never-log-this",
+                },
+            )
+        assert response.status_code == 202, response.text
+        log_info.assert_called_once()
+        assert log_info.call_args.kwargs["extra"]["group_count"] == 0
+        assert "access_token" not in log_info.call_args.kwargs["extra"]
+        assert "never-log-this" not in log_info.call_args.kwargs["extra"]["error_message"]
+    finally:
+        client.app.dependency_overrides.pop(get_current_user, None)
+
+
 def make_valid_init_data(bot_token: str, user_id: int = 12345, **extra) -> str:
     """Generate a valid initData string for testing.
 

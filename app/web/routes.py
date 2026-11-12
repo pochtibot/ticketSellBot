@@ -6,6 +6,7 @@ User-facing endpoints require platform initData validation. VK Pay notifications
 
 import io
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qs
@@ -41,6 +42,7 @@ from app.core.schemas import (
     SubscribeMeIn,
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
+    VKWallPublishDiagnosticIn,
     PromoCodeCreate,
     BuyIn,
     PriceRangesUpdate,
@@ -1346,6 +1348,39 @@ async def list_my_vk_groups(current: CurrentUser = Depends(get_current_user)):
         }
         for g in groups
     ]
+
+
+@router.post("/me/vk-wall-post-diagnostics", status_code=status.HTTP_202_ACCEPTED)
+async def log_vk_wall_post_diagnostic(
+    body: VKWallPublishDiagnosticIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Принимает только безопасные метаданные VK-публикации, без пользовательского ключа."""
+    if current.platform != PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Диагностика доступна только в VK")
+
+    safe_error_message = body.error_message
+    if safe_error_message:
+        safe_error_message = re.sub(
+            r"(?i)(access_token|token)([\s\"'=:\u0026]+)[^&\s,\"}]+",
+            r"\1\2[REDACTED]",
+            safe_error_message,
+        )
+    log_method = logger.warning if body.status == "failed" else logger.info
+    log_method("", extra={
+        "event_type": "vk.wall_post_step",
+        "operation_id": body.operation_id,
+        "step": body.step,
+        "step_status": body.status,
+        "event_id": body.event_id,
+        "group_id": body.group_id,
+        "group_count": body.group_count,
+        "error_code": body.error_code,
+        "error_message": safe_error_message,
+        "user_id": str(current.user_id),
+        "platform": current.platform.value,
+    })
+    return {"accepted": True}
 
 
 @router.post("/me/vk-groups", status_code=status.HTTP_201_CREATED)

@@ -71,6 +71,28 @@ def test_vk_text_wall_post_requests_user_scope_and_posts_as_selected_community()
     assert "tgConfirm(" in wall_post
 
 
+def test_vk_wall_post_logs_each_step_and_refreshes_groups_before_publish():
+    wall_post = APP_JS.split("async function adminVkWallTextPost(eventId)", 1)[1].split(
+        "async function adminToggle(eventId)", 1
+    )[0]
+    for step in (
+        "publish_start", "group_list_refresh", "group_validate", "bridge_check",
+        "confirm", "auth_token_request", "auth_token_validate", "wall_post_request",
+        "wall_post_response", "publish_error",
+    ):
+        assert f'step: "{step}"' in wall_post
+    assert 'await api("/api/me/vk-groups")' in wall_post
+    assert 'group_count: currentGroups.length' in wall_post
+    assert "empty_group_list" in wall_post
+    assert "VK отклонил wall.post" in wall_post
+    assert 'api("/api/me/vk-wall-post-diagnostics"' in APP_JS
+
+
+def test_vk_wall_post_explains_empty_or_unavailable_group_list():
+    assert "Список подключённых сообществ пуст" in APP_JS
+    assert "Не удалось загрузить список подключённых сообществ" in APP_JS
+
+
 def test_vk_groups_page_can_install_the_mini_app_into_a_community():
     assert 'onclick="installVKAppToCommunity()"' in APP_JS
     install_fn = APP_JS.split("async function installVKAppToCommunity()", 1)[1].split(
