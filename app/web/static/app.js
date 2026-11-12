@@ -2532,15 +2532,43 @@ function createVKWallOperationId() {
 }
 
 function getVKWallErrorDetails(error) {
-    const source = error?.error_data || error?.data || error?.error || error;
-    const code = source?.error_code ?? source?.code ?? error?.error_code ?? error?.code;
-    const message = source?.error_msg || source?.message || error?.message || String(error || "Неизвестная ошибка");
+    // vk-bridge rejects with the payload from VKWebAppEvent. Depending on the
+    // client/version it may be nested under Error.detail.data, data, or
+    // error_data. Walk known wrappers so error_reason isn't lost as [object Object].
+    const pending = [error];
+    const seen = new Set();
+    const candidates = [];
+    while (pending.length && candidates.length < 12) {
+        const value = pending.shift();
+        if (!value || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) continue;
+        seen.add(value);
+        candidates.push(value);
+        for (const key of ["detail", "data", "error_data", "error", "response"]) {
+            const nested = value[key];
+            if (nested && typeof nested === "object") pending.push(nested);
+        }
+    }
+    const find = keys => {
+        for (const key of keys) {
+            for (const candidate of candidates) {
+                const value = candidate[key];
+                if (value != null && String(value).trim()) return String(value).trim();
+            }
+        }
+        return "";
+    };
+    const errorType = find(["error_type"]);
+    const code = find(["error_code", "code"]);
+    const message = find(["error_reason", "error_description", "error_msg", "description", "message"])
+        || (typeof error === "string" ? error : "Неизвестная ошибка VK Bridge");
+    const safeMessage = String(message)
+        .replace(/\s+/g, " ")
+        .replace(/(access_token|token)([\s"'=:\u0026]+)[^&\s,"}]+/gi, "$1$2[REDACTED]")
+        .slice(0, 500);
     return {
-        error_code: code == null ? "client_error" : String(code).slice(0, 64),
-        error_message: String(message)
-            .replace(/\s+/g, " ")
-            .replace(/(access_token|token)([\s"'=:\u0026]+)[^&\s,"}]+/gi, "$1$2[REDACTED]")
-            .slice(0, 500),
+        error_type: errorType.slice(0, 64) || null,
+        error_code: code.slice(0, 64) || "client_error",
+        error_message: safeMessage,
     };
 }
 

@@ -87,6 +87,18 @@ def test_vk_wall_post_logs_each_step_and_refreshes_groups_before_publish():
     assert 'api("/api/me/vk-wall-post-diagnostics"' in APP_JS
 
 
+def test_vk_wall_post_error_parser_unwraps_bridge_payload_and_keeps_reason():
+    parser = APP_JS.split("function getVKWallErrorDetails(error)", 1)[1].split(
+        "async function logVKWallPostStep", 1
+    )[0]
+    assert '"detail", "data", "error_data", "error", "response"' in parser
+    assert '"error_reason", "error_description", "error_msg", "description", "message"' in parser
+    assert 'find(["error_type"])' in parser
+    assert "error_type: errorType" in parser
+    assert 'error_type: Optional[str]' in (Path(__file__).resolve().parent.parent / "app" / "core" / "schemas.py").read_text(encoding="utf-8")
+    assert '"error_type": body.error_type' in ROUTES
+
+
 def test_vk_wall_post_explains_empty_or_unavailable_group_list():
     assert "Список подключённых сообществ пуст" in APP_JS
     assert "Не удалось загрузить список подключённых сообществ" in APP_JS

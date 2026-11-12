@@ -273,6 +273,7 @@ class VKWallPublishDiagnosticIn(BaseModel):
     event_id: Optional[str] = Field(default=None, max_length=64)
     group_id: Optional[str] = Field(default=None, max_length=32)
     group_count: Optional[int] = Field(default=None, ge=0, le=10000)
+    error_type: Optional[str] = Field(default=None, max_length=64)
     error_code: Optional[str] = Field(default=None, max_length=64)
     error_message: Optional[str] = Field(default=None, max_length=500)
 

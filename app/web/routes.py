@@ -1375,6 +1375,7 @@ async def log_vk_wall_post_diagnostic(
         "event_id": body.event_id,
         "group_id": body.group_id,
         "group_count": body.group_count,
+        "error_type": body.error_type,
         "error_code": body.error_code,
         "error_message": safe_error_message,
         "user_id": str(current.user_id),
