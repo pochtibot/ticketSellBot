@@ -13,6 +13,7 @@ const state = {
     initData: "",
     platform: "telegram", // "telegram" | "vk"
     vkAppId: "",          // VK App ID из launch params (для VKWebAppGetCommunityToken)
+    vkCommunityTokens: {}, // Временные ключи сообществ, только в памяти вкладки
     vkWallPublishPending: false,
     vkAdminGroups: null,   // Сообщества, которыми пользователь управляет в VK
     events: [],
@@ -3144,7 +3145,7 @@ async function adminVkWallApiPost(eventId) {
         showToast("Публикация уже выполняется", true);
         return;
     }
-    if (state.platform !== "vk") {
+    if (state.platform !== "vk" || !window.vkBridge) {
         logFailure("bridge_check", "vk_platform_required", "Публикация доступна только из VK-приложения");
         showToast("Откройте Билетёр в VK, чтобы опубликовать запись", true);
         return;
@@ -3174,6 +3175,39 @@ async function adminVkWallApiPost(eventId) {
         await logVKWallPostStep({ ...baseLog, step: "publish_start", status: "started" });
         await logVKWallPostStep({ ...baseLog, step: "group_validate", status: "success" });
 
+        let communityToken = state.vkCommunityTokens[String(groupId)] || "";
+        let grantedPermissions = [];
+        if (communityToken) {
+            currentStep = "community_token_validate";
+            try {
+                const permissionResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+                    method: "groups.getTokenPermissions",
+                    params: { access_token: communityToken, v: "5.199" },
+                }, 30000);
+                grantedPermissions = getVKCommunityPermissionNames(permissionResult?.response ?? permissionResult);
+            } catch (_) {
+                delete state.vkCommunityTokens[String(groupId)];
+                communityToken = "";
+            }
+        }
+
+        if (!communityToken || !grantedPermissions.includes("wall")) {
+            currentStep = "community_token_request";
+            await logVKWallPostStep({ ...baseLog, step: currentStep, status: "started" });
+            const community = (state.vkAdminGroups || []).find(group => Number(group.id) === Number(groupId));
+            const acquired = await acquireVKCommunityWallToken(groupId, community?.name || null);
+            communityToken = acquired.accessToken;
+            grantedPermissions = acquired.permissions;
+            await logVKWallPostStep({ ...baseLog, step: currentStep, status: "success" });
+        }
+        if (!grantedPermissions.includes("wall")) {
+            throw Object.assign(new Error("У ключа сообщества нет права wall"), {
+                error_code: "community_wall_scope_missing",
+            });
+        }
+        currentStep = "community_token_validate";
+        await logVKWallPostStep({ ...baseLog, step: currentStep, status: "success" });
+
         const title = String(event.title || "Мероприятие").trim();
         const price = Number(event.price || 0);
         const messageParts = [
@@ -3191,17 +3225,18 @@ async function adminVkWallApiPost(eventId) {
         }
         currentStep = "wall_post_request";
         await logVKWallPostStep({ ...baseLog, step: "wall_post_request", status: "started" });
-        const result = await api("/api/me/vk-wall-post", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                operation_id: operationId,
-                event_id: String(eventId),
-                group_id: String(groupId),
+        const bridgeResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+            method: "wall.post",
+            params: {
+                access_token: communityToken,
+                v: "5.199",
+                owner_id: -Number(groupId),
+                from_group: 1,
                 message: messageParts.join("\n"),
-            }),
-        });
-        const postId = Number(result && result.post_id);
+            },
+        }, 30000);
+        const result = bridgeResult?.response ?? bridgeResult;
+        const postId = Number(result && (result.post_id || result.postId));
         if (!Number.isSafeInteger(postId) || postId <= 0) {
             const details = getVKWallErrorDetails(result);
             throw Object.assign(new Error(details.error_message || "VK не вернул ID созданной записи"), {
@@ -3220,6 +3255,7 @@ async function adminVkWallApiPost(eventId) {
             ...details,
         });
         await logVKWallPostStep({ ...baseLog, step: "publish_error", status: "failed", ...details });
+        if (details.error_code === "5") delete state.vkCommunityTokens[String(groupId)];
         showToast(details.error_message || "Не удалось опубликовать запись через API", true);
     } finally {
         state.vkWallPublishPending = false;
@@ -3240,6 +3276,82 @@ function getVKCommunityTokenMethod(bridge) {
     return methods.find(method => {
         try { return bridge.supports(method); } catch (_) { return false; }
     }) || null;
+}
+
+function getVKCommunityPermissionNames(permissionData) {
+    const knownScopes = new Set(["wall", "stories", "photos", "app_widget", "messages", "docs", "manage"]);
+    const permissions = new Set();
+    const collect = value => {
+        if (typeof value === "string") {
+            if (knownScopes.has(value)) permissions.add(value);
+        } else if (Array.isArray(value)) {
+            value.forEach(collect);
+        } else if (value && typeof value === "object") {
+            for (const [name, item] of Object.entries(value)) {
+                if (knownScopes.has(name)) {
+                    if (item && typeof item === "object") {
+                        const status = String(item.status || "").toLowerCase();
+                        if (["1", "true", "allowed", "granted", "yes"].includes(status)) permissions.add(name);
+                    } else if (![null, undefined, false, 0, "", "0", "false", "denied", "not_allowed"].includes(item)) {
+                        permissions.add(name);
+                    }
+                }
+                if (["name", "permission", "scope"].includes(name) && typeof item === "string" && knownScopes.has(item)) {
+                    permissions.add(item);
+                }
+                collect(item);
+            }
+        }
+    };
+    collect(permissionData);
+    return [...permissions];
+}
+
+async function acquireVKCommunityWallToken(groupId, title = null) {
+    const id = Number(groupId);
+    const appId = Number(state.vkAppId);
+    if (!Number.isSafeInteger(appId) || appId <= 0) {
+        throw new Error("Не удалось определить ID приложения. Перезапустите его.");
+    }
+    const tokenMethod = getVKCommunityTokenMethod(window.vkBridge);
+    if (!tokenMethod) throw new Error("В этой версии приложения недоступен запрос ключа сообщества");
+
+    const tokenResult = await vkBridgeRequest(tokenMethod, {
+        app_id: appId,
+        group_id: id,
+        scope: "wall,stories,photos,app_widget,messages,docs,manage",
+    }, 60000);
+    const accessToken = tokenResult?.access_token || "";
+    if (!accessToken) throw new Error("VK не вернул ключ сообщества");
+    state.vkCommunityTokens[String(id)] = accessToken;
+
+    let permissions = [];
+    let permissionError = "";
+    try {
+        const permissionResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+            method: "groups.getTokenPermissions",
+            params: { access_token: accessToken, v: "5.199" },
+        }, 30000);
+        permissions = getVKCommunityPermissionNames(permissionResult?.response ?? permissionResult);
+    } catch (error) {
+        permissionError = error?.message || "Не удалось проверить выданные права";
+    }
+
+    // Keep the existing encrypted server-side copy for other community features.
+    // Wall publishing itself uses the token directly through VK Bridge below.
+    try {
+        await api("/api/me/vk-groups", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ group_id: String(id), title, community_token: accessToken }),
+        });
+    } catch (error) {
+        console.warn("VK community token could not be saved", {
+            group_id: String(id),
+            error: error?.message || String(error),
+        });
+    }
+    return { accessToken, permissions, permissionError };
 }
 
 async function addMyVKGroup() {
@@ -3365,6 +3477,8 @@ async function connectMyVKGroup(groupId) {
         }
 
         const linked = await api("/api/me/vk-groups");
+        if (communityToken) state.vkCommunityTokens[String(id)] = communityToken;
+        else delete state.vkCommunityTokens[String(id)];
         hideLoading();
         renderMyVKGroups(linked);
         showToast(communityToken
@@ -3388,74 +3502,22 @@ async function requestVKCommunityWallToken(groupId) {
     const requestedScope = "wall,stories,photos,app_widget,messages,docs,manage";
     showLoading();
     try {
-        const appId = Number(state.vkAppId);
-        if (!Number.isSafeInteger(appId) || appId <= 0) {
-            throw new Error("Не удалось определить ID приложения. Перезапустите его.");
-        }
-        const tokenMethod = getVKCommunityTokenMethod(window.vkBridge);
-        if (!tokenMethod) {
-            throw new Error("В этой версии приложения недоступен запрос ключа сообщества");
-        }
-
-        // Experimental request: include wall alongside the currently used scopes.
-        // Never log or display the token itself.
-        const tokenResult = await vkBridgeRequest(tokenMethod, {
-            app_id: appId,
-            group_id: id,
-            scope: requestedScope,
-        }, 60000);
-        const communityToken = tokenResult?.access_token || "";
-        if (!communityToken) throw new Error("VK не вернул ключ сообщества");
-
-        let grantedPermissions = [];
-        let permissionCheckError = "";
-        try {
-            const permissionResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
-                method: "groups.getTokenPermissions",
-                params: { access_token: communityToken, v: "5.199" },
-            }, 30000);
-            const permissionData = permissionResult?.response ?? permissionResult;
-            const knownScopes = new Set(["wall", "stories", "photos", "app_widget", "messages", "docs", "manage"]);
-            const collectScopes = value => {
-                if (typeof value === "string") {
-                    if (knownScopes.has(value)) grantedPermissions.push(value);
-                } else if (Array.isArray(value)) {
-                    value.forEach(collectScopes);
-                } else if (value && typeof value === "object") {
-                    Object.values(value).forEach(collectScopes);
-                }
-            };
-            collectScopes(permissionData);
-            grantedPermissions = [...new Set(grantedPermissions)];
-        } catch (error) {
-            permissionCheckError = error?.message || "Не удалось проверить выданные права";
-        }
-        const wallGranted = grantedPermissions.includes("wall");
-
-        await api("/api/me/vk-groups", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                group_id: String(id),
-                title,
-                community_token: communityToken,
-            }),
-        });
+        const acquired = await acquireVKCommunityWallToken(id, title);
         const linked = await api("/api/me/vk-groups");
         hideLoading();
         renderMyVKGroups(linked);
         console.info("VK community wall-scope probe", {
             group_id: String(id),
             requested_scope: requestedScope,
-            granted_permissions: grantedPermissions,
-            permission_check_error: permissionCheckError || undefined,
-            wall_appears_in_permissions: wallGranted,
+            granted_permissions: acquired.permissions,
+            permission_check_error: acquired.permissionError || undefined,
+            wall_appears_in_permissions: acquired.permissions.includes("wall"),
         });
-        showToast(permissionCheckError
-            ? `VK вернул ключ, но проверить права не удалось: ${permissionCheckError}`
-            : wallGranted
+        showToast(acquired.permissionError
+            ? `VK вернул ключ, но проверить права не удалось: ${acquired.permissionError}`
+            : acquired.permissions.includes("wall")
                 ? "VK вернул ключ; право wall присутствует в groups.getTokenPermissions."
-                : "VK вернул ключ, но право wall в groups.getTokenPermissions не обнаружено.", Boolean(permissionCheckError) || !wallGranted);
+                : "VK вернул ключ, но право wall в groups.getTokenPermissions не обнаружено.", Boolean(acquired.permissionError) || !acquired.permissions.includes("wall"));
     } catch (error) {
         hideLoading();
         console.warn("VK community wall-scope probe failed", {
@@ -3471,6 +3533,7 @@ async function removeMyVKGroup(groupId) {
     if (!(await tgConfirm(`Удалить сообщество ${groupId}?`))) return;
     try {
         await api(`/api/me/vk-groups/${encodeURIComponent(groupId)}`, { method: "DELETE" });
+        delete state.vkCommunityTokens[String(groupId)];
         showToast("✅ Сообщество удалено");
         await showMyVKGroups();
     } catch (e) { showToast(e.message || "Ошибка", true); }

@@ -267,6 +267,7 @@ class VKWallPublishDiagnosticIn(BaseModel):
     step: Literal[
         "group_list_load", "publish_start", "publish_error", "group_list_refresh", "group_validate",
         "confirm", "bridge_check", "auth_token_request", "auth_token_validate",
+        "community_token_request", "community_token_validate",
         "wall_post_request", "wall_post_response", "wall_post_box_request", "wall_post_box_response",
     ]
     status: Literal["started", "success", "failed", "skipped"]
@@ -276,14 +277,6 @@ class VKWallPublishDiagnosticIn(BaseModel):
     error_type: Optional[str] = Field(default=None, max_length=64)
     error_code: Optional[str] = Field(default=None, max_length=64)
     error_message: Optional[str] = Field(default=None, max_length=500)
-
-
-class VKWallPostProxyIn(BaseModel):
-    """One-shot request to proxy a wall post through the backend."""
-    operation_id: str = Field(min_length=1, max_length=64)
-    event_id: UUID
-    group_id: str = Field(min_length=1, max_length=32, pattern=r"^\d+$")
-    message: str = Field(min_length=1, max_length=5000)
 
 
 class PublishIn(BaseModel):
