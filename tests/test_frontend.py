@@ -65,6 +65,7 @@ def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community(
     )[0]
     assert '"VKWebAppShowWallPostBox"' in wall_post
     assert "owner_id: -Number(groupId)" in wall_post
+    assert "from_group: 1" in wall_post
     assert "message," in wall_post
     assert '"VKWebAppCallAPIMethod"' not in wall_post
     assert '"wall.post"' not in wall_post
