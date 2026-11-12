@@ -3067,9 +3067,13 @@ function renderMyVKGroups(groups) {
                     ${linked
                         ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
                             <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${groupId}')">${linked.has_token ? "Обновить права" : "Выдать токен"}</button>
+                            <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${groupId}')">Проверить ключ wall</button>
                             <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${groupId}')">Удалить</button>
                         </div>`
-                        : `<button class="btn btn-sm btn-primary" onclick="connectMyVKGroup('${groupId}')">Подключить</button>`}
+                        : `<div style="display:flex;gap:6px;flex-wrap:wrap">
+                            <button class="btn btn-sm btn-primary" onclick="connectMyVKGroup('${groupId}')">Подключить</button>
+                            <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${groupId}')">Проверить ключ wall</button>
+                        </div>`}
                 </div>`;
         }
         html += `</div>`;
@@ -3095,6 +3099,7 @@ function renderMyVKGroups(groups) {
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${escapeHtml(g.group_id)}')">${g.has_token ? "Обновить права" : "Выдать токен"}</button>
+                        <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${escapeHtml(g.group_id)}')">Проверить ключ wall</button>
                         <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${escapeHtml(g.group_id)}')">Удалить</button>
                     </div>
                 </div>`;
@@ -3443,6 +3448,97 @@ async function connectMyVKGroup(groupId) {
     } catch (e) {
         hideLoading();
         showToast(e.message || "Ошибка подключения сообщества", true);
+    }
+}
+
+async function requestVKCommunityWallToken(groupId) {
+    const id = Number(groupId);
+    if (state.platform !== "vk" || !window.vkBridge || !Number.isSafeInteger(id) || id <= 0) {
+        showToast("Откройте приложение в поддерживаемом клиенте и выберите сообщество", true);
+        return;
+    }
+
+    const community = (state.vkAdminGroups || []).find(group => Number(group.id) === id);
+    const title = community?.name || null;
+    const requestedScope = "wall,stories,photos,app_widget,messages,docs,manage";
+    showLoading();
+    try {
+        const appId = Number(state.vkAppId);
+        if (!Number.isSafeInteger(appId) || appId <= 0) {
+            throw new Error("Не удалось определить ID приложения. Перезапустите его.");
+        }
+        const tokenMethod = getVKCommunityTokenMethod(window.vkBridge);
+        if (!tokenMethod) {
+            throw new Error("В этой версии приложения недоступен запрос ключа сообщества");
+        }
+
+        // Experimental request: include wall alongside the currently used scopes.
+        // Never log or display the token itself.
+        const tokenResult = await vkBridgeRequest(tokenMethod, {
+            app_id: appId,
+            group_id: id,
+            scope: requestedScope,
+        }, 60000);
+        const communityToken = tokenResult?.access_token || "";
+        if (!communityToken) throw new Error("VK не вернул ключ сообщества");
+
+        let grantedPermissions = [];
+        let permissionCheckError = "";
+        try {
+            const permissionResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+                method: "groups.getTokenPermissions",
+                params: { access_token: communityToken, v: "5.199" },
+            }, 30000);
+            const permissionData = permissionResult?.response ?? permissionResult;
+            const knownScopes = new Set(["wall", "stories", "photos", "app_widget", "messages", "docs", "manage"]);
+            const collectScopes = value => {
+                if (typeof value === "string") {
+                    if (knownScopes.has(value)) grantedPermissions.push(value);
+                } else if (Array.isArray(value)) {
+                    value.forEach(collectScopes);
+                } else if (value && typeof value === "object") {
+                    Object.values(value).forEach(collectScopes);
+                }
+            };
+            collectScopes(permissionData);
+            grantedPermissions = [...new Set(grantedPermissions)];
+        } catch (error) {
+            permissionCheckError = error?.message || "Не удалось проверить выданные права";
+        }
+        const wallGranted = grantedPermissions.includes("wall");
+
+        await api("/api/me/vk-groups", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                group_id: String(id),
+                title,
+                community_token: communityToken,
+            }),
+        });
+        const linked = await api("/api/me/vk-groups");
+        hideLoading();
+        renderMyVKGroups(linked);
+        console.info("VK community wall-scope probe", {
+            group_id: String(id),
+            requested_scope: requestedScope,
+            granted_permissions: grantedPermissions,
+            permission_check_error: permissionCheckError || undefined,
+            wall_appears_in_permissions: wallGranted,
+        });
+        showToast(permissionCheckError
+            ? `VK вернул ключ, но проверить права не удалось: ${permissionCheckError}`
+            : wallGranted
+                ? "VK вернул ключ; право wall присутствует в groups.getTokenPermissions."
+                : "VK вернул ключ, но право wall в groups.getTokenPermissions не обнаружено.", Boolean(permissionCheckError) || !wallGranted);
+    } catch (error) {
+        hideLoading();
+        console.warn("VK community wall-scope probe failed", {
+            group_id: String(id),
+            requested_scope: requestedScope,
+            error: error?.message || String(error),
+        });
+        showToast(error?.message || "Не удалось запросить ключ сообщества с правом wall", true);
     }
 }
 

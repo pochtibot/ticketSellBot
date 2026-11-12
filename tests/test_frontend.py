@@ -160,6 +160,20 @@ def test_vk_connected_group_can_refresh_community_token_scopes():
     assert 'g.has_token ? "Обновить права" : "Выдать токен"' in APP_JS
 
 
+def test_vk_community_wall_scope_probe_has_group_button_and_never_logs_token():
+    assert 'onclick="requestVKCommunityWallToken(\'${groupId}\')"' in APP_JS
+    probe = APP_JS.split("async function requestVKCommunityWallToken(groupId)", 1)[1].split(
+        "async function removeMyVKGroup", 1
+    )[0]
+    assert 'scope: requestedScope' in probe
+    assert 'const requestedScope = "wall,stories,photos,app_widget,messages,docs,manage"' in probe
+    assert 'method: "groups.getTokenPermissions"' in probe
+    assert "wall_appears_in_permissions: wallGranted" in probe
+    assert "access_token: communityToken" in probe
+    assert "console.info" in probe and "granted_permissions: grantedPermissions" in probe
+    assert "access_token: communityToken," not in probe.split("console.info", 1)[1]
+
+
 def test_vk_app_opens_event_from_launch_hash():
     assert 'new URLSearchParams((window.location.hash || "").replace(/^#/, ""))' in APP_JS
     assert 'params.get("event_id") || fragmentParams.get("event_id")' in APP_JS
