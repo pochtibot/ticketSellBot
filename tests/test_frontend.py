@@ -47,6 +47,17 @@ def test_appjs_has_vk_groups_ui():
     assert "removeMyVKGroup" in APP_JS
 
 
+def test_vk_wall_user_token_is_requested_separately_and_not_persisted():
+    assert 'onclick="requestVKWallAccess()"' in APP_JS
+    wall_auth = APP_JS.split("async function requestVKWallAccess()", 1)[1].split(
+        "function getVKCommunityTokenMethod", 1
+    )[0]
+    assert '"VKWebAppGetAuthToken"' in wall_auth
+    assert 'scope: "wall"' in wall_auth
+    assert 'grantedScopes.includes("wall")' in wall_auth
+    assert "state.vkWallAccessToken" not in APP_JS
+
+
 def test_vk_groups_page_can_install_the_mini_app_into_a_community():
     assert 'onclick="installVKAppToCommunity()"' in APP_JS
     install_fn = APP_JS.split("async function installVKAppToCommunity()", 1)[1].split(

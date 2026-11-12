@@ -2729,8 +2729,10 @@ function renderMyVKGroups(groups) {
         ${canLoadVKGroups
             ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
                 <button class="btn btn-primary" onclick="addMyVKGroup()">↻ Загрузить мои сообщества</button>
+                <button class="btn btn-secondary" onclick="requestVKWallAccess()">Запросить доступ к стене</button>
                 <button class="btn btn-secondary" onclick="installVKAppToCommunity()">Установить приложение в сообщество</button>
-            </div>`
+            </div>
+            <p class="hint" style="margin-bottom:16px">VK запросит пользовательский ключ с правом wall. Ключ не сохраняется.</p>`
             : `<p class="hint" style="margin-bottom:16px">Список сообществ доступен, когда приложение открыто в поддерживаемом клиенте.</p>`}
     `;
 
@@ -2811,6 +2813,36 @@ async function vkBridgeRequest(method, params = {}, timeoutMs = 20000) {
         ]);
     } finally {
         clearTimeout(timeoutId);
+    }
+}
+
+async function requestVKWallAccess() {
+    if (state.platform !== "vk" || !window.vkBridge) {
+        showToast("Откройте приложение в VK, чтобы запросить доступ к стене", true);
+        return;
+    }
+    try {
+        const appId = Number(state.vkAppId);
+        if (!Number.isSafeInteger(appId) || appId <= 0) {
+            throw new Error("Не удалось определить ID приложения. Перезапустите его.");
+        }
+        const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
+            app_id: appId,
+            scope: "wall",
+        });
+        if (!auth || !auth.access_token) {
+            throw new Error("VK не вернул пользовательский ключ");
+        }
+        const grantedScopes = String(auth.scope || "").split(",").map(scope => scope.trim()).filter(Boolean);
+        if (!grantedScopes.includes("wall")) {
+            showToast("Право wall не предоставлено. Публикация на стене недоступна.", true);
+            return;
+        }
+        // Key is intentionally kept only in this function; it is neither stored
+        // in app state nor sent to the TicketBot backend.
+        showToast("Доступ к стене предоставлен. Пользовательский ключ не сохранён.");
+    } catch (e) {
+        showToast(e.message || "Не удалось запросить доступ к стене", true);
     }
 }
 
