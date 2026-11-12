@@ -60,8 +60,8 @@ def test_vk_wall_user_token_is_requested_separately_and_not_persisted():
 
 def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community():
     assert 'onclick="adminVkWallTextPost(' in APP_JS
-    wall_post = APP_JS.split("async function adminVkWallTextPost(eventId)", 1)[1].split(
-        "async function adminToggle(eventId)", 1
+    wall_post = APP_JS.split("function adminVkWallTextPost(eventId)", 1)[1].split(
+        "function createVKWallOperationId()", 1
     )[0]
     assert '"VKWebAppShowWallPostBox"' in wall_post
     assert "owner_id: -Number(groupId)" in wall_post
@@ -72,17 +72,25 @@ def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community(
     assert "tgConfirm(" not in wall_post
 
 
-def test_vk_wall_post_logs_each_step_and_refreshes_groups_before_publish():
-    wall_post = APP_JS.split("async function adminVkWallTextPost(eventId)", 1)[1].split(
-        "async function adminToggle(eventId)", 1
+def test_vk_wall_post_starts_bridge_request_synchronously_before_network_diagnostics():
+    wall_post = APP_JS.split("function adminVkWallTextPost(eventId)", 1)[1].split(
+        "function createVKWallOperationId()", 1
     )[0]
+    click_handler = wall_post.split("async function completeVKWallTextPost", 1)[0]
+    completion_handler = wall_post.split("async function completeVKWallTextPost", 1)[1]
+    assert 'bridgePromise = vkBridgeRequest("VKWebAppShowWallPostBox"' in click_handler
+    assert click_handler.index('bridgePromise = vkBridgeRequest("VKWebAppShowWallPostBox"') < click_handler.index(
+        "const diagnosticStart = (async () => {"
+    )
+    assert 'await api("/api/me/vk-groups")' not in click_handler
+    assert "groupSelect?.options" in click_handler
+    assert "await bridgePromise" in completion_handler
     for step in (
-        "publish_start", "group_list_refresh", "group_validate", "bridge_check",
+        "publish_start", "group_validate", "bridge_check",
         "wall_post_box_request", "wall_post_box_response", "publish_error",
     ):
         assert f'step: "{step}"' in wall_post
-    assert 'await api("/api/me/vk-groups")' in wall_post
-    assert 'group_count: currentGroups.length' in wall_post
+    assert 'group_count: groupCount' in wall_post
     assert "empty_group_list" in wall_post
     assert "VK не открыл форму публикации" in wall_post
     assert 'api("/api/me/vk-wall-post-diagnostics"' in APP_JS
@@ -203,8 +211,8 @@ def test_vk_unsupported_story_personal_paths_are_removed_and_interactive_wall_po
         assert forbidden not in ROUTES
     assert "async function adminPublish(eventId)" in APP_JS
     assert "Опубликовать и отправить анонс себе" in APP_JS
-    wall_post = APP_JS.split("async function adminVkWallTextPost(eventId)", 1)[1].split(
-        "async function adminToggle(eventId)", 1
+    wall_post = APP_JS.split("function adminVkWallTextPost(eventId)", 1)[1].split(
+        "function createVKWallOperationId()", 1
     )[0]
     assert '"VKWebAppShowWallPostBox"' in wall_post
     assert '"wall.post"' not in wall_post
