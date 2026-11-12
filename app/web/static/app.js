@@ -1891,24 +1891,29 @@ async function showAdminEventDetail(eventId) {
         const event = await api(`/api/admin/events/${eventId}`);
         state.currentAdminEvent = event;
         let stats = null, tickets = null, invites = [], promos = [], priceRanges = [];
+        let vkGroups = [];
         try { stats = await api(`/api/admin/events/${eventId}/stats`); } catch (e) { /* нет доступа */ }
         try { tickets = await api(`/api/admin/events/${eventId}/tickets`); } catch (e) { /* нет доступа */ }
         try { invites = (await api(`/api/admin/events/${eventId}/invites`)).invites || []; } catch (e) { /* нет доступа */ }
         try { promos = (await api(`/api/admin/events/${eventId}/promo-codes`)).promo_codes || []; } catch (e) { /* нет доступа */ }
         try { priceRanges = (await api(`/api/admin/events/${eventId}/price-ranges`)).price_ranges || []; } catch (e) { /* нет доступа */ }
-        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges);
+        if (isVKMode()) {
+            try { vkGroups = await api("/api/me/vk-groups"); } catch (e) { /* публикация на стене недоступна */ }
+        }
+        renderAdminEventDetail(event, stats, tickets ? tickets.tickets : [], invites, promos, priceRanges, vkGroups);
     } catch (err) {
         hideLoading();
         showError(err.message || "Ошибка загрузки");
     }
 }
 
-function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges) {
+function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRanges, vkGroups = []) {
     hideLoading();
     const container = document.getElementById("adminEventContent");
     invites = invites || [];
     promos = promos || [];
     priceRanges = priceRanges || [];
+    vkGroups = vkGroups || [];
 
     const statsHtml = stats ? `
         <div class="stat-grid">
@@ -2005,6 +2010,20 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 </div>`).join('')}</div>`}
     `;
 
+    const wallGroups = vkGroups.filter(group => /^\d+$/.test(String(group.group_id || "")));
+    const vkWallPostHtml = isVKMode() && event.is_published && event.is_active
+        ? (wallGroups.length ? `
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px">
+                <label class="form-label" for="vk_wall_group_${event.id}" style="margin:0">Сообщество</label>
+                <select class="form-input" id="vk_wall_group_${event.id}" style="width:auto;min-width:180px">
+                    ${wallGroups.map(group => `<option value="${escapeHtml(group.group_id)}">${escapeHtml(group.title || ('ID ' + group.group_id))}</option>`).join('')}
+                </select>
+                <button class="btn btn-sm btn-secondary" onclick="adminVkWallTextPost('${event.id}')">Опубликовать текстовый анонс на стене</button>
+            </div>
+            <p class="hint">Публикация будет сделана от имени сообщества. VK запросит пользовательский доступ с правом wall.</p>`
+        : '<p class="hint">Подключите сообщество в кабинете, чтобы опубликовать анонс на его стене.</p>')
+        : '';
+
     container.innerHTML = `
         ${(event.has_media || event.media_file_id) ? `<img class="event-poster event-poster-detail" src="/api/events/${event.id}/media" alt="Афиша">` : ''}
         <h2>${escapeHtml(event.title)}</h2>
@@ -2034,6 +2053,7 @@ function renderAdminEventDetail(event, stats, tickets, invites, promos, priceRan
                 <button class="btn btn-sm btn-primary" onclick="adminPublish('${event.id}')">${isVKMode() ? '🌐 Опубликовать и отправить анонс себе' : '📢 Опубликовать'}</button>
             </div>
             ${isVKMode() ? '<span class="hint">Анонс придёт в ваши VK-сообщения от подключённого сообщества после разрешения.</span>' : ''}
+            ${vkWallPostHtml}
             <button class="btn btn-sm btn-secondary" onclick="adminToggle('${event.id}')">${event.is_active ? '⏸ Выключить' : '▶️ Включить'}</button>
             <button class="btn btn-sm btn-secondary" onclick="showAdminEventForm('${event.id}')">✏️ Редактировать</button>
             <button class="btn btn-sm btn-danger" onclick="adminDelete('${event.id}')">🗑 Удалить</button>
@@ -2274,6 +2294,79 @@ async function adminRepost(eventId) {
         const res = await api(`/api/admin/events/${eventId}/repost`, { method: "POST" });
         showToast(res.announced ? "✅ Анонс отправлен" : "⚠️ Анонс не отправлен");
     } catch (e) { showToast(e.message || "Ошибка", true); }
+}
+
+async function adminVkWallTextPost(eventId) {
+    const groupSelect = document.getElementById(`vk_wall_group_${eventId}`);
+    const groupId = groupSelect?.value;
+    const event = state.currentAdminEvent;
+    if (!groupId || !/^\d+$/.test(groupId)) {
+        showToast("Выберите подключённое сообщество", true);
+        return;
+    }
+    if (!event || String(event.id) !== String(eventId)) {
+        showToast("Не удалось загрузить мероприятие", true);
+        return;
+    }
+    if (!window.vkBridge) {
+        showToast("Откройте мероприятие в приложении VK, чтобы запросить пользовательский ключ", true);
+        return;
+    }
+
+    const title = String(event.title || "Мероприятие").trim();
+    const price = Number(event.price || 0);
+    const messageParts = [
+        "📣 АНОНС МЕРОПРИЯТИЯ",
+        "",
+        `🎟 ${title}`,
+        `📅 ${formatDate(event.date)}`,
+        `📍 ${event.location || "Место уточняется"}`,
+        `💳 ${price > 0 ? `${formatPrice(price)}` : "Бесплатно"}`,
+    ];
+    const description = String(event.description || "").replace(/\s+/g, " ").trim();
+    if (description) messageParts.push("", description.slice(0, 700));
+    const message = messageParts.join("\n");
+    if (!(await tgConfirm(
+        `Опубликовать текстовый анонс «${title}» на стене сообщества ${groupId}?`,
+        "Опубликовать",
+        "Отмена",
+    ))) return;
+
+    try {
+        showLoading();
+        const appId = Number(state.vkAppId);
+        if (!Number.isSafeInteger(appId) || appId <= 0) {
+            throw new Error("Не удалось определить ID приложения. Перезапустите его.");
+        }
+        const auth = await vkBridgeRequest("VKWebAppGetAuthToken", {
+            app_id: appId,
+            scope: "wall",
+        });
+        if (!auth || !auth.access_token) throw new Error("VK не вернул пользовательский ключ");
+        const grantedScopes = String(auth.scope || "").split(",").map(scope => scope.trim()).filter(Boolean);
+        if (!grantedScopes.includes("wall")) throw new Error("VK не предоставил право wall");
+
+        const result = await vkBridgeRequest("VKWebAppCallAPIMethod", {
+            method: "wall.post",
+            params: {
+                access_token: auth.access_token,
+                v: "5.199",
+                owner_id: -Number(groupId),
+                from_group: 1,
+                message,
+            },
+        });
+        const response = result && result.response;
+        const postId = Number(response && (response.post_id || response));
+        if (!Number.isSafeInteger(postId) || postId <= 0) {
+            throw new Error("VK не вернул ID созданной записи");
+        }
+        hideLoading();
+        showToast(`Текстовый анонс опубликован на стене сообщества. ID записи: ${postId}`);
+    } catch (e) {
+        hideLoading();
+        showToast(e.message || "Не удалось опубликовать анонс на стене сообщества", true);
+    }
 }
 
 async function adminToggle(eventId) {

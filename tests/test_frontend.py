@@ -58,6 +58,19 @@ def test_vk_wall_user_token_is_requested_separately_and_not_persisted():
     assert "state.vkWallAccessToken" not in APP_JS
 
 
+def test_vk_text_wall_post_requests_user_scope_and_posts_as_selected_community():
+    assert 'onclick="adminVkWallTextPost(' in APP_JS
+    wall_post = APP_JS.split("async function adminVkWallTextPost(eventId)", 1)[1].split(
+        "async function adminToggle(eventId)", 1
+    )[0]
+    assert 'scope: "wall"' in wall_post
+    assert 'method: "wall.post"' in wall_post
+    assert "owner_id: -Number(groupId)" in wall_post
+    assert "from_group: 1" in wall_post
+    assert "message," in wall_post
+    assert "tgConfirm(" in wall_post
+
+
 def test_vk_groups_page_can_install_the_mini_app_into_a_community():
     assert 'onclick="installVKAppToCommunity()"' in APP_JS
     install_fn = APP_JS.split("async function installVKAppToCommunity()", 1)[1].split(
@@ -146,9 +159,9 @@ def test_vk_monetization_actions_require_server_readiness():
     assert "Оплата билетов сейчас недоступна" in APP_JS
 
 
-def test_vk_wall_story_and_personal_publication_paths_are_removed():
+def test_vk_story_and_personal_publication_paths_are_removed():
     for forbidden in (
-        "VKWebAppShowWallPostBox", "wall.post", "stories.getPhotoUploadServer",
+        "VKWebAppShowWallPostBox", "stories.getPhotoUploadServer",
         "stories.save", "vk-wall-photo-upload", "vk-personal-wall-draft",
         "vk-publications/manual", "client-diagnostics/vk",
     ):
