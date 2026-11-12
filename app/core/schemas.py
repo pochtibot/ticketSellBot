@@ -267,7 +267,7 @@ class VKWallPublishDiagnosticIn(BaseModel):
     step: Literal[
         "group_list_load", "publish_start", "publish_error", "group_list_refresh", "group_validate",
         "confirm", "bridge_check", "auth_token_request", "auth_token_validate",
-        "wall_post_request", "wall_post_response",
+        "wall_post_request", "wall_post_response", "wall_post_box_request", "wall_post_box_response",
     ]
     status: Literal["started", "success", "failed", "skipped"]
     event_id: Optional[str] = Field(default=None, max_length=64)
