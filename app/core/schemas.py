@@ -283,7 +283,6 @@ class VKWallPostProxyIn(BaseModel):
     operation_id: str = Field(min_length=1, max_length=64)
     event_id: UUID
     group_id: str = Field(min_length=1, max_length=32, pattern=r"^\d+$")
-    access_token: str = Field(min_length=1, max_length=8192, repr=False)
     message: str = Field(min_length=1, max_length=5000)
 
 

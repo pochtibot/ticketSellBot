@@ -47,35 +47,34 @@ def test_appjs_has_vk_groups_ui():
     assert "removeMyVKGroup" in APP_JS
 
 
-def test_vk_wall_user_token_is_requested_validated_and_kept_in_memory():
-    assert 'onclick="requestVKWallAccess()"' in APP_JS
-    wall_auth = APP_JS.split("async function requestVKWallAccess()", 1)[1].split(
-        "function getVKCommunityTokenMethod", 1
-    )[0]
-    assert '"VKWebAppGetAuthToken"' in wall_auth
-    assert 'scope: "wall"' in wall_auth
-    assert 'grantedScopes.includes("wall")' in wall_auth
-    assert "state.vkWallAccessToken = auth.access_token" in wall_auth
-    assert "wall" in wall_auth
-    assert 'step: "auth_token_request"' in wall_auth
-    assert 'step: "auth_token_validate"' in wall_auth
-    assert "localStorage" not in wall_auth
+def test_vk_community_wall_publishing_does_not_request_or_send_user_token():
+    assert 'onclick="requestVKWallAccess()"' not in APP_JS
+    assert "vkWallAccessToken" not in APP_JS
 
 
-def test_vk_direct_wall_post_uses_user_token_and_logs_steps_without_logging_token():
+def test_vk_direct_wall_post_uses_server_stored_community_token_and_logs_steps():
     assert 'onclick="adminVkWallApiPost(' in APP_JS
     wall_post = APP_JS.split("async function adminVkWallApiPost(eventId)", 1)[1].split(
         "function getVKCommunityTokenMethod", 1
     )[0]
     assert 'api("/api/me/vk-wall-post"' in wall_post
-    assert "access_token: authToken" in wall_post
+    assert "access_token:" not in wall_post
+    assert '"VKWebAppGetAuthToken"' not in wall_post
     assert 'method: "wall.post"' not in wall_post
     assert '"VKWebAppCallAPIMethod"' not in wall_post
-    for step in ("publish_start", "group_validate", "auth_token_request", "auth_token_validate", "wall_post_request", "wall_post_response", "publish_error"):
+    for step in ("publish_start", "group_validate", "wall_post_request", "wall_post_response", "publish_error"):
         assert f'step: "{step}"' in wall_post
     assert "access_token" not in wall_post.split("logVKWallPostStep", 1)[0]
     assert '"event_type": "vk.wall_post_proxy"' in ROUTES
-    assert "body.access_token" in ROUTES
+    proxy = ROUTES.split("async def proxy_vk_wall_post", 1)[1].split(
+        '@router.post("/me/vk-groups"', 1
+    )[0]
+    assert "decrypt_token(group.community_token or \"\")" in proxy
+    assert 'vk_api_call("groups.getTokenPermissions", community_token)' in proxy
+    assert 'if "wall" not in permission_names' in proxy
+    assert '"event_type": "vk.wall_post_token_permissions"' in proxy
+    assert '"permissions": sorted(permission_names)' in proxy
+    assert "body.access_token" not in proxy
     assert "owner_id=-int(body.group_id)" in ROUTES
     assert "from_group=1" in ROUTES
 

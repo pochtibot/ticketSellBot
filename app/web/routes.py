@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 
 from app.config import settings
+from app.core.crypto import decrypt_token
 from app.core.database import async_session_factory
 from app.core.models import PlatformType, Event, EventPoster, VKPayOrder, VKPayProductOrder, SubscriptionTier
 from app.core.vk_pay_service import VKPayOrderService
@@ -1390,12 +1391,7 @@ async def proxy_vk_wall_post(
     body: VKWallPostProxyIn,
     current: CurrentUser = Depends(get_current_user),
 ):
-    """Proxy one authorized wall.post call from VK Mini App to VK API.
-
-    The user's short-lived access token is used for this request only; it is
-    never stored or included in logs. The event and destination community are
-    checked against the authenticated organizer before the VK call.
-    """
+    """Publish an event announcement using the organizer's stored community token."""
     if current.platform is not PlatformType.vk:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Доступно только из VK-приложения")
 
@@ -1414,15 +1410,82 @@ async def proxy_vk_wall_post(
         group = next((item for item in connected_groups if item.group_id == body.group_id), None)
         if group is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Сообщество не подключено к вашему кабинету")
+        community_token = decrypt_token(group.community_token or "")
+
+    if not community_token:
+        logger.warning("", extra={
+            "event_type": "vk.wall_post_proxy",
+            "operation_id": body.operation_id,
+            "status": "failed",
+            "event_id": str(body.event_id),
+            "group_id": body.group_id,
+            "error_code": "community_token_missing",
+            "user_id": str(current.user_id),
+            "platform": current.platform.value,
+        })
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Для сообщества не сохранён ключ доступа")
 
     try:
+        permission_data = await vk_api_call("groups.getTokenPermissions", community_token)
+        permission_names: set[str] = set()
+        known_permissions = {"wall", "stories", "photos", "app_widget", "messages", "docs", "manage"}
+
+        def collect_permissions(value):
+            if isinstance(value, str):
+                if value in known_permissions:
+                    permission_names.add(value)
+            elif isinstance(value, list):
+                for item in value:
+                    collect_permissions(item)
+            elif isinstance(value, dict):
+                for name, item in value.items():
+                    if name in known_permissions:
+                        if isinstance(item, dict):
+                            status_value = str(item.get("status", "")).lower()
+                            if status_value in {"1", "true", "allowed", "granted", "yes"}:
+                                permission_names.add(name)
+                        elif item not in (None, False, 0, "", "0", "false", "denied", "not_allowed"):
+                            permission_names.add(name)
+                    if name in {"name", "permission", "scope"} and isinstance(item, str) and item in known_permissions:
+                        permission_names.add(item)
+                    collect_permissions(item)
+
+        collect_permissions(permission_data)
+        logger.info("", extra={
+            "event_type": "vk.wall_post_token_permissions",
+            "operation_id": body.operation_id,
+            "event_id": str(body.event_id),
+            "group_id": body.group_id,
+            "permissions": sorted(permission_names),
+            "wall_granted": "wall" in permission_names,
+            "user_id": str(current.user_id),
+            "platform": current.platform.value,
+        })
+        if "wall" not in permission_names:
+            logger.warning("", extra={
+                "event_type": "vk.wall_post_proxy",
+                "operation_id": body.operation_id,
+                "status": "failed",
+                "event_id": str(body.event_id),
+                "group_id": body.group_id,
+                "error_code": "community_wall_scope_missing",
+                "user_id": str(current.user_id),
+                "platform": current.platform.value,
+            })
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="У сохранённого ключа сообщества нет права wall. Запросите ключ сообщества с этим правом.",
+            )
+
         response = await vk_api_call(
             "wall.post",
-            body.access_token,
+            community_token,
             owner_id=-int(body.group_id),
             from_group=1,
             message=body.message,
         )
+    except HTTPException:
+        raise
     except VKAPIError as exc:
         safe_message = re.sub(
             r"(?i)(access_token|token)([\s\"'=:\u0026]+)[^&\s,\"}]+",
@@ -1435,6 +1498,7 @@ async def proxy_vk_wall_post(
             "status": "failed",
             "event_id": str(body.event_id),
             "group_id": body.group_id,
+            "step": "wall_post_request",
             "error_code": str(exc.code) if exc.code is not None else None,
             "error_message": safe_message,
             "user_id": str(current.user_id),
@@ -1452,6 +1516,7 @@ async def proxy_vk_wall_post(
             "status": "failed",
             "event_id": str(body.event_id),
             "group_id": body.group_id,
+            "step": "wall_post_request",
             "error_code": "transport_error",
             "user_id": str(current.user_id),
             "platform": current.platform.value,
