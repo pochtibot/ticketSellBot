@@ -3231,7 +3231,6 @@ async function adminVkWallApiPost(eventId) {
                 access_token: communityToken,
                 v: "5.199",
                 owner_id: -Number(groupId),
-                from_group: 1,
                 message: messageParts.join("\n"),
             },
         }, 30000);

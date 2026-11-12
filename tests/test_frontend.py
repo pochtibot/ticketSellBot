@@ -63,7 +63,7 @@ def test_vk_direct_wall_post_uses_community_token_through_bridge_without_backend
     assert 'vkBridgeRequest("VKWebAppCallAPIMethod"' in wall_post
     assert "access_token: communityToken" in wall_post
     assert "owner_id: -Number(groupId)" in wall_post
-    assert "from_group: 1" in wall_post
+    assert "from_group" not in wall_post
     for step in ("publish_start", "group_validate", "wall_post_request", "wall_post_response", "publish_error"):
         assert f'step: "{step}"' in wall_post
     assert 'currentStep = "community_token_request"' in wall_post
