@@ -2458,7 +2458,6 @@ async function adminVkWallTextPost(eventId) {
             // No access token or direct wall.post API call is needed.
             result = await vkBridgeRequest("VKWebAppShowWallPostBox", {
                 owner_id: -Number(groupId),
-                from_group: 1,
                 message,
             }, null);
         } catch (e) {
