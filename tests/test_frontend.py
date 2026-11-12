@@ -47,7 +47,7 @@ def test_appjs_has_vk_groups_ui():
     assert "removeMyVKGroup" in APP_JS
 
 
-def test_vk_wall_user_token_is_requested_separately_and_not_persisted():
+def test_vk_wall_user_token_is_requested_validated_and_kept_in_memory():
     assert 'onclick="requestVKWallAccess()"' in APP_JS
     wall_auth = APP_JS.split("async function requestVKWallAccess()", 1)[1].split(
         "function getVKCommunityTokenMethod", 1
@@ -55,7 +55,26 @@ def test_vk_wall_user_token_is_requested_separately_and_not_persisted():
     assert '"VKWebAppGetAuthToken"' in wall_auth
     assert 'scope: "wall"' in wall_auth
     assert 'grantedScopes.includes("wall")' in wall_auth
-    assert "state.vkWallAccessToken" not in APP_JS
+    assert "state.vkWallAccessToken = auth.access_token" in wall_auth
+    assert "wall" in wall_auth
+    assert 'step: "auth_token_request"' in wall_auth
+    assert 'step: "auth_token_validate"' in wall_auth
+    assert "localStorage" not in wall_auth
+
+
+def test_vk_direct_wall_post_uses_user_token_and_logs_steps_without_logging_token():
+    assert 'onclick="adminVkWallApiPost(' in APP_JS
+    wall_post = APP_JS.split("async function adminVkWallApiPost(eventId)", 1)[1].split(
+        "function getVKCommunityTokenMethod", 1
+    )[0]
+    assert 'method: "wall.post"' in wall_post
+    assert '"VKWebAppCallAPIMethod"' in wall_post
+    assert "owner_id: -Number(groupId)" in wall_post
+    assert "from_group: 1" in wall_post
+    assert "access_token: authToken" in wall_post
+    for step in ("publish_start", "group_validate", "auth_token_request", "auth_token_validate", "wall_post_request", "wall_post_response", "publish_error"):
+        assert f'step: "{step}"' in wall_post
+    assert "access_token" not in wall_post.split("logVKWallPostStep", 1)[0]
 
 
 def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community():
@@ -70,6 +89,7 @@ def test_vk_text_wall_post_opens_interactive_vk_composer_for_selected_community(
     assert '"VKWebAppCallAPIMethod"' not in wall_post
     assert '"wall.post"' not in wall_post
     assert "tgConfirm(" not in wall_post
+    assert 'onclick="adminVkWallApiPost(' in APP_JS
 
 
 def test_vk_wall_post_starts_bridge_request_synchronously_before_network_diagnostics():
