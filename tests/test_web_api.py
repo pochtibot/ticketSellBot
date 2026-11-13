@@ -6,6 +6,7 @@ initData validation тестируем отдельно с известными 
 """
 
 import contextlib
+import asyncio
 import hashlib
 from uuid import UUID as _UUID
 import hmac
@@ -118,7 +119,7 @@ def test_vk_wall_post_uses_cyan_day_api_parameters_and_returns_vk_response(clien
             patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=event),
             patch("app.web.routes.VKGroupService.get_by_group_id", new_callable=AsyncMock, return_value=group),
             patch("app.web.routes.decrypt_token", return_value="community-secret"),
-            patch("app.web.routes.vk_api_call", new_callable=AsyncMock, return_value={"post_id": 42}) as vk_call,
+            patch("app.web.routes.vk_wall_post", new_callable=AsyncMock, return_value={"post_id": 42}) as vk_call,
         ):
             response = client.post(
                 f"/api/admin/events/{EVENT_ID}/vk-wall-post",
@@ -128,7 +129,6 @@ def test_vk_wall_post_uses_cyan_day_api_parameters_and_returns_vk_response(clien
         assert response.status_code == 200, response.text
         assert response.json() == {"response": {"post_id": 42}}
         vk_call.assert_awaited_once_with(
-            "wall.post",
             "community-secret",
             owner_id=-777,
             message="Event announcement",
@@ -136,6 +136,30 @@ def test_vk_wall_post_uses_cyan_day_api_parameters_and_returns_vk_response(clien
         assert "community-secret" not in response.text
     finally:
         client.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_vk_wall_post_uses_same_vk_api_library_call_as_cyan_day():
+    from types import SimpleNamespace
+    from app.web.vk_api import vk_wall_post
+
+    wall = Mock()
+    wall.post.return_value = {"post_id": 42}
+    api = SimpleNamespace(wall=wall)
+    session = Mock()
+    session.get_api.return_value = api
+    with (
+        patch("app.web.vk_api.vk_api.VkApi", return_value=session) as make_session,
+        patch(
+            "app.web.vk_api.asyncio.to_thread",
+            new_callable=AsyncMock,
+            side_effect=lambda fn, *args: fn(*args),
+        ),
+    ):
+        result = asyncio.run(vk_wall_post("community-secret", owner_id=-777, message="Event announcement"))
+
+    assert result == {"post_id": 42}
+    make_session.assert_called_once_with(token="community-secret")
+    wall.post.assert_called_once_with(owner_id=-777, message="Event announcement")
 
 
 def make_valid_init_data(bot_token: str, user_id: int = 12345, **extra) -> str:

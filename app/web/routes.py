@@ -72,9 +72,10 @@ from app.web.announce import post_event_announcement, send_announcement_dm, send
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
     VKAPIError,
+    VKAPITransportError,
     send_vk_organizer_announcement_dm,
     send_vk_ticket_dm,
-    vk_api_call,
+    vk_wall_post,
     verify_group_token,
 )
 from app.web.vk_pay import (
@@ -1429,9 +1430,8 @@ async def publish_vk_event_to_group_wall(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Для сообщества не сохранён ключ. Обновите ключ с правом wall в приложении.")
 
     try:
-        # Keep the API call aligned with cyan-day: wall.post(owner_id, message).
-        response = await vk_api_call(
-            "wall.post",
+        # Match cyan-day's vk_api 11.10.1 implementation and its default v5.92.
+        response = await vk_wall_post(
             token,
             owner_id=-int(group_id),
             message=body.message.strip(),
@@ -1450,7 +1450,7 @@ async def publish_vk_event_to_group_wall(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"VK wall.post error {exc.code}: {exc.api_message}",
         ) from exc
-    except httpx.HTTPError as exc:
+    except VKAPITransportError as exc:
         logger.warning("", extra={
             "event_type": "vk.wall_post.backend",
             "event_id": str(uid),

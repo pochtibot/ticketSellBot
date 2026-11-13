@@ -2549,7 +2549,7 @@ function getVKWallErrorDetails(error) {
     const message = find(["error_reason", "error_description", "error_msg", "description", "message"])
         || (typeof error === "string" ? error : "Неизвестная ошибка VK Bridge");
     const code = find(["error_code", "code"])
-        || (message.match(/VK API(?: error)?\s*(\d+)\s*:/i) || [])[1]
+        || (message.match(/VK (?:API|wall\.post)(?: error)?\s*(\d+)\s*:/i) || [])[1]
         || "";
     const safeMessage = String(message)
         .replace(/\s+/g, " ")

@@ -3,10 +3,14 @@
 Community token хранится зашифрованным и расшифровывается только для API-запроса.
 """
 
+import asyncio
 import json
 import logging
 
 import httpx
+import requests
+import vk_api
+from vk_api.exceptions import ApiError, VkApiError
 
 from app.core.crypto import decrypt_token
 
@@ -22,6 +26,32 @@ class VKAPIError(Exception):
         super().__init__(message)
         self.code = code
         self.api_message = api_message or message
+
+
+class VKAPITransportError(Exception):
+    """VK API HTTP or network failure from vk_api's requests client."""
+
+
+def _vk_wall_post_sync(token: str, owner_id: int, message: str) -> dict:
+    """Use the same vk_api call as cyan-day, including its defaults."""
+    session = vk_api.VkApi(token=token)
+    api = session.get_api()
+    return api.wall.post(owner_id=owner_id, message=message)
+
+
+async def vk_wall_post(token: str, *, owner_id: int, message: str) -> dict:
+    """Publish with cyan-day's vk_api 11.10.1 call and default API v5.92."""
+    try:
+        return await asyncio.to_thread(_vk_wall_post_sync, token, owner_id, message)
+    except ApiError as exc:
+        error = exc.error if isinstance(exc.error, dict) else {}
+        raise VKAPIError(
+            f"VK API wall.post error {exc.code}: {error.get('error_msg', str(exc))}",
+            code=exc.code,
+            api_message=str(error.get("error_msg") or str(exc)),
+        ) from exc
+    except (VkApiError, requests.exceptions.RequestException, OSError) as exc:
+        raise VKAPITransportError(str(exc)) from exc
 
 
 async def vk_api_call(method: str, token: str, **params) -> dict:

@@ -120,6 +120,7 @@ def test_vk_wall_post_error_parser_unwraps_bridge_payload_and_keeps_reason():
     assert '"error_reason", "error_description", "error_msg", "description", "message"' in parser
     assert 'find(["error_type"])' in parser
     assert "error_type: errorType" in parser
+    assert r"VK (?:API|wall\.post)(?: error)?" in parser
     assert 'error_type: Optional[str]' in (Path(__file__).resolve().parent.parent / "app" / "core" / "schemas.py").read_text(encoding="utf-8")
     assert '"error_type": body.error_type' in ROUTES
 

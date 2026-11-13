@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "aiogram>=3.0",
     "vkbottle>=4.10.0",
+    "vk-api==11.10.1",
     "alembic>=1.13",
     "fastapi>=0.115",
     "uvicorn>=0.32",
