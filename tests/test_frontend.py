@@ -52,26 +52,24 @@ def test_vk_community_wall_publishing_does_not_request_or_send_user_token():
     assert "vkWallAccessToken" not in APP_JS
 
 
-def test_vk_direct_wall_post_uses_community_token_through_bridge_without_backend_proxy():
+def test_vk_wall_post_uses_saved_community_token_through_backend_like_cyan_day():
     assert 'onclick="adminVkWallApiPost(' in APP_JS
     wall_post = APP_JS.split("async function adminVkWallApiPost(eventId)", 1)[1].split(
         "function getVKCommunityTokenMethod", 1
     )[0]
-    assert 'api("/api/me/vk-wall-post"' not in wall_post
     assert '"VKWebAppGetAuthToken"' not in wall_post
-    assert 'method: "wall.post"' in wall_post
-    assert 'vkBridgeRequest("VKWebAppCallAPIMethod"' in wall_post
-    assert "access_token: communityToken" in wall_post
-    assert "owner_id: -Number(groupId)" in wall_post
+    assert "vk-wall-post`" in wall_post
+    assert 'message: messageParts.join("\\n")' in wall_post
+    assert 'method: "wall.post"' not in wall_post
     assert "from_group" not in wall_post
-    for step in ("publish_start", "group_validate", "wall_post_request", "wall_post_response", "publish_error"):
+    for step in ("publish_start", "group_validate", "wall_post_response", "publish_error"):
         assert f'step: "{step}"' in wall_post
+    assert 'currentStep = "wall_post_request"' in wall_post
     assert 'currentStep = "community_token_request"' in wall_post
     assert 'currentStep = "community_token_validate"' in wall_post
     assert "access_token" not in wall_post.split("logVKWallPostStep", 1)[0]
-    assert '@router.post("/me/vk-wall-post")' not in ROUTES
-    assert "class VKWallPostProxyIn" not in (Path(__file__).resolve().parent.parent / "app" / "core" / "schemas.py").read_text(encoding="utf-8")
-    assert '"/api/me/vk-wall-post"' not in APP_JS
+    assert '@router.post("/admin/events/{event_id}/vk-wall-post")' in ROUTES
+    assert 'api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-post`' in APP_JS
     assert '@router.post("/me/vk-wall-post-diagnostics"' in ROUTES
 
 
@@ -170,6 +168,8 @@ def test_vk_community_wall_scope_probe_has_group_button_and_never_logs_token():
     assert 'scope: "wall,stories,photos,app_widget,messages,docs,manage"' in acquire
     assert 'method: "groups.getTokenPermissions"' in acquire
     assert "access_token: accessToken" in acquire
+    assert 'api("/api/me/vk-groups"' in acquire
+    assert "community_token: accessToken" in acquire
 
 
 def test_vk_app_opens_event_from_launch_hash():

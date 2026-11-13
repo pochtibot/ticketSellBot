@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.database import async_session_factory
+from app.core.crypto import decrypt_token
 from app.core.models import PlatformType, Event, EventPoster, VKPayOrder, VKPayProductOrder, SubscriptionTier
 from app.core.vk_pay_service import VKPayOrderService
 from app.core.qr import generate_qr_png
@@ -42,6 +43,7 @@ from app.core.schemas import (
     SubscribeMeIn,
     UpdateSubscriptionIn,
     VKGroupRegisterIn,
+    VKWallPostIn,
     VKWallPublishDiagnosticIn,
     PromoCodeCreate,
     BuyIn,
@@ -69,8 +71,10 @@ from app.web.dependencies import (
 from app.web.announce import post_event_announcement, send_announcement_dm, send_broadcast
 from app.web.telegram_client import get_telegram_bot
 from app.web.vk_api import (
+    VKAPIError,
     send_vk_organizer_announcement_dm,
     send_vk_ticket_dm,
+    vk_api_call,
     verify_group_token,
 )
 from app.web.vk_pay import (
@@ -1381,6 +1385,95 @@ async def log_vk_wall_post_diagnostic(
         "platform": current.platform.value,
     })
     return {"accepted": True}
+
+
+@router.post("/admin/events/{event_id}/vk-wall-post")
+async def publish_vk_event_to_group_wall(
+    event_id: str,
+    body: VKWallPostIn,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Publish through the backend using the connected community token.
+
+    The VK API parameters intentionally match cyan-day's working request:
+    owner_id and message only. The encrypted token is loaded from our DB.
+    """
+    if current.platform is not PlatformType.vk:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Доступно только в VK-приложении")
+    try:
+        uid = UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID мероприятия")
+    group_id = body.group_id.strip().lstrip("-")
+    if not group_id.isascii() or not group_id.isdigit() or int(group_id) <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неверный ID сообщества")
+
+    async with async_session_factory() as session:
+        event_svc = EventService(session)
+        event = await event_svc.get_by_id(uid)
+        if event is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Мероприятие не найдено")
+        if not _can_manage_event(current, event):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="У вас нет доступа к мероприятию")
+        if not event.is_published or not event.is_active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Сначала опубликуйте активное мероприятие в Билетере")
+        if event.owner_user_id is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="У мероприятия нет организатора VK")
+
+        group_svc = VKGroupService(session)
+        group = await group_svc.get_by_group_id(group_id)
+        if group is None or group.owner_user_id != event.owner_user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщество не подключено организатором этого мероприятия")
+        token = decrypt_token(group.community_token or "")
+        if not token:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Для сообщества не сохранён ключ. Обновите ключ с правом wall в приложении.")
+
+    try:
+        # Keep the API call aligned with cyan-day: wall.post(owner_id, message).
+        response = await vk_api_call(
+            "wall.post",
+            token,
+            owner_id=-int(group_id),
+            message=body.message.strip(),
+        )
+    except VKAPIError as exc:
+        logger.warning("", extra={
+            "event_type": "vk.wall_post.backend",
+            "event_id": str(uid),
+            "group_id": group_id,
+            "user_id": str(current.user_id),
+            "status": "failed",
+            "error_code": exc.code,
+            "error_message": exc.api_message,
+        })
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"VK wall.post error {exc.code}: {exc.api_message}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.warning("", extra={
+            "event_type": "vk.wall_post.backend",
+            "event_id": str(uid),
+            "group_id": group_id,
+            "user_id": str(current.user_id),
+            "status": "failed",
+            "error_type": "transport_error",
+            "error_message": str(exc)[:500],
+        })
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Не удалось связаться с API VK") from exc
+
+    if not isinstance(response, dict) or not response.get("post_id"):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="VK не вернул ID созданной записи")
+    logger.info("", extra={
+        "event_type": "vk.wall_post.backend",
+        "event_id": str(uid),
+        "group_id": group_id,
+        "user_id": str(current.user_id),
+        "status": "success",
+        "post_id": response["post_id"],
+    })
+    # Return VK's response payload so the Mini App can show the result.
+    return {"response": response}
 
 
 @router.post("/me/vk-groups", status_code=status.HTTP_201_CREATED)

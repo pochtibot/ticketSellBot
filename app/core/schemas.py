@@ -279,6 +279,12 @@ class VKWallPublishDiagnosticIn(BaseModel):
     error_message: Optional[str] = Field(default=None, max_length=500)
 
 
+class VKWallPostIn(BaseModel):
+    """Post an event announcement to a connected community wall."""
+    group_id: str = Field(min_length=1, max_length=32)
+    message: str = Field(min_length=1, max_length=4096)
+
+
 class PublishIn(BaseModel):
     """Публикация мероприятия в Telegram."""
     channel_id: Optional[UUID] = None

@@ -95,6 +95,49 @@ def test_vk_wall_post_diagnostic_records_safe_step(client):
         client.app.dependency_overrides.pop(get_current_user, None)
 
 
+def test_vk_wall_post_uses_cyan_day_api_parameters_and_returns_vk_response(client):
+    from types import SimpleNamespace
+    from app.core.models import PlatformType
+    from app.web.dependencies import CurrentUser, get_current_user
+
+    user_id = _UUID(USER_ID)
+    current = CurrentUser(
+        user_id=user_id,
+        telegram_user_id="5305539",
+        name=None,
+        is_super_admin=False,
+        platform=PlatformType.vk,
+    )
+    event = SimpleNamespace(
+        id=_UUID(EVENT_ID), owner_user_id=user_id, is_published=True, is_active=True,
+    )
+    group = SimpleNamespace(group_id="777", owner_user_id=user_id, community_token="encrypted")
+    client.app.dependency_overrides[get_current_user] = lambda: current
+    try:
+        with (
+            patch("app.web.routes.EventService.get_by_id", new_callable=AsyncMock, return_value=event),
+            patch("app.web.routes.VKGroupService.get_by_group_id", new_callable=AsyncMock, return_value=group),
+            patch("app.web.routes.decrypt_token", return_value="community-secret"),
+            patch("app.web.routes.vk_api_call", new_callable=AsyncMock, return_value={"post_id": 42}) as vk_call,
+        ):
+            response = client.post(
+                f"/api/admin/events/{EVENT_ID}/vk-wall-post",
+                headers={"X-Skip-Auth": "1"},
+                json={"group_id": "777", "message": "Event announcement"},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"response": {"post_id": 42}}
+        vk_call.assert_awaited_once_with(
+            "wall.post",
+            "community-secret",
+            owner_id=-777,
+            message="Event announcement",
+        )
+        assert "community-secret" not in response.text
+    finally:
+        client.app.dependency_overrides.pop(get_current_user, None)
+
+
 def make_valid_init_data(bot_token: str, user_id: int = 12345, **extra) -> str:
     """Generate a valid initData string for testing.
 

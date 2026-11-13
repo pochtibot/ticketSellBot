@@ -3224,17 +3224,13 @@ async function adminVkWallApiPost(eventId) {
             messageParts.push("", `Билеты и подробности: https://vk.com/app${encodeURIComponent(state.vkAppId)}#event_id=${encodeURIComponent(eventId)}`);
         }
         currentStep = "wall_post_request";
-        await logVKWallPostStep({ ...baseLog, step: "wall_post_request", status: "started" });
-        const bridgeResult = await vkBridgeRequest("VKWebAppCallAPIMethod", {
-            method: "wall.post",
-            params: {
-                access_token: communityToken,
-                v: "5.199",
-                owner_id: -Number(groupId),
-                message: messageParts.join("\n"),
-            },
-        }, 30000);
-        const result = bridgeResult?.response ?? bridgeResult;
+        await logVKWallPostStep({ ...baseLog, step: currentStep, status: "started" });
+        const backendResult = await api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-post`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ group_id: String(groupId), message: messageParts.join("\n") }),
+        });
+        const result = backendResult?.response ?? backendResult;
         const postId = Number(result && (result.post_id || result.postId));
         if (!Number.isSafeInteger(postId) || postId <= 0) {
             const details = getVKWallErrorDetails(result);
@@ -3244,7 +3240,7 @@ async function adminVkWallApiPost(eventId) {
         }
         currentStep = "wall_post_response";
         await logVKWallPostStep({ ...baseLog, step: "wall_post_response", status: "success" });
-        showToast(`Запись опубликована на стене сообщества. ID: ${postId}`);
+        showToast(`Ответ VK: ${JSON.stringify(result)}`);
     } catch (e) {
         const details = getVKWallErrorDetails(e);
         await logVKWallPostStep({
@@ -3336,20 +3332,14 @@ async function acquireVKCommunityWallToken(groupId, title = null) {
         permissionError = error?.message || "Не удалось проверить выданные права";
     }
 
-    // Keep the existing encrypted server-side copy for other community features.
-    // Wall publishing itself uses the token directly through VK Bridge below.
-    try {
-        await api("/api/me/vk-groups", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: String(id), title, community_token: accessToken }),
-        });
-    } catch (error) {
-        console.warn("VK community token could not be saved", {
-            group_id: String(id),
-            error: error?.message || String(error),
-        });
-    }
+    // Keep the returned community key encrypted on the backend so the server
+    // can execute wall.post with the same saved key.
+    await api("/api/me/vk-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group_id: String(id), title, community_token: accessToken }),
+    });
+
     return { accessToken, permissions, permissionError };
 }
 

@@ -1,4 +1,4 @@
-"""VK API client for private ticket messages.
+"""VK API client for server-side community operations.
 
 Community token хранится зашифрованным и расшифровывается только для API-запроса.
 """
