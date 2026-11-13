@@ -3208,27 +3208,12 @@ async function adminVkWallApiPost(eventId) {
         currentStep = "community_token_validate";
         await logVKWallPostStep({ ...baseLog, step: currentStep, status: "success" });
 
-        const title = String(event.title || "Мероприятие").trim();
-        const price = Number(event.price || 0);
-        const messageParts = [
-            "📣 АНОНС МЕРОПРИЯТИЯ",
-            "",
-            `🎟 ${title}`,
-            `📅 ${formatDate(event.date)}`,
-            `📍 ${event.location || "Место уточняется"}`,
-            `💳 ${price > 0 ? formatPrice(price) : "Бесплатно"}`,
-        ];
-        const description = String(event.description || "").replace(/\s+/g, " ").trim();
-        if (description) messageParts.push("", description.slice(0, 700));
-        if (state.vkAppId) {
-            messageParts.push("", `Билеты и подробности: https://vk.com/app${encodeURIComponent(state.vkAppId)}#event_id=${encodeURIComponent(eventId)}`);
-        }
         currentStep = "wall_post_request";
         await logVKWallPostStep({ ...baseLog, step: currentStep, status: "started" });
         const backendResult = await api(`/api/admin/events/${encodeURIComponent(eventId)}/vk-wall-post`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: String(groupId), message: messageParts.join("\n") }),
+            body: JSON.stringify({ group_id: String(groupId), message: "тест" }),
         });
         const result = backendResult?.response ?? backendResult;
         const postId = Number(result && (result.post_id || result.postId));
