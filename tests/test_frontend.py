@@ -59,7 +59,7 @@ def test_vk_wall_post_uses_saved_community_token_through_backend_like_cyan_day()
     )[0]
     assert '"VKWebAppGetAuthToken"' not in wall_post
     assert "vk-wall-post`" in wall_post
-    assert 'message: messageParts.join("\\n")' in wall_post
+    assert 'message: "тест"' in wall_post
     assert 'method: "wall.post"' not in wall_post
     assert "from_group" not in wall_post
     for step in ("publish_start", "group_validate", "wall_post_response", "publish_error"):
