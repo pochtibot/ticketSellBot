@@ -84,6 +84,8 @@ services:
       db:
         condition: service_healthy
     env_file: .env.telegram
+    environment:
+      VK_TEMP_KEY: ${VK_TEMP_KEY:-}
     command: ["python", "-m", "app.bot.web"]
     ports:
       - "127.0.0.1:8080:8080"

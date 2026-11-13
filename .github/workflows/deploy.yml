@@ -88,10 +88,15 @@ jobs:
           echo "✅ .env.telegram создан"
 
       - name: 📋 Создать .env из секретов
+        env:
+          VK_TEMP_KEY: ${{ secrets.VK_TEMP_KEY }}
         run: |
           cat > .env << 'ENVEOF'
           POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
           ENVEOF
+          if [ -n "$VK_TEMP_KEY" ]; then
+            printf 'VK_TEMP_KEY=%s\n' "$VK_TEMP_KEY" >> .env
+          fi
           echo "✅ .env создан"
 
       - name: 📋 Создать .env.vk из секретов
