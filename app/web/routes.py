@@ -1369,6 +1369,18 @@ async def start_vk_group_oauth(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OAuth для сообществ не настроен: задайте credentials веб-приложения VK и callback URL",
         )
+    try:
+        oauth_app_id = int(settings.vk_group_oauth_app_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="VK_GROUP_OAUTH_APP_ID должен быть числовым ID приложения",
+        )
+    if oauth_app_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="VK_GROUP_OAUTH_APP_ID должен быть положительным ID приложения",
+        )
 
     raw_group_id = str(body.get("group_id") or "").strip().lstrip("-")
     if not raw_group_id.isascii() or not raw_group_id.isdigit() or int(raw_group_id) <= 0:
@@ -1384,7 +1396,7 @@ async def start_vk_group_oauth(
     )
     return {
         "authorize_url": build_authorize_url(
-            app_id=settings.vk_group_oauth_app_id,
+            app_id=oauth_app_id,
             redirect_uri=settings.vk_group_oauth_redirect_uri,
             group_id=group_id,
             state=state,
