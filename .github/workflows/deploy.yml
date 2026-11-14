@@ -74,6 +74,9 @@ jobs:
           VK_APP_ID=${{ secrets.VK_APP_ID }}
           VK_SECRET_KEY=${{ secrets.VK_SECRET_KEY }}
           VK_TOKEN_ENCRYPTION_KEY=${{ secrets.VK_TOKEN_ENCRYPTION_KEY }}
+          VK_GROUP_OAUTH_APP_ID=${{ secrets.VK_GROUP_OAUTH_APP_ID }}
+          VK_GROUP_OAUTH_CLIENT_SECRET=${{ secrets.VK_GROUP_OAUTH_CLIENT_SECRET }}
+          VK_GROUP_OAUTH_REDIRECT_URI=${{ secrets.VK_GROUP_OAUTH_REDIRECT_URI }}
           VK_PAY_ENABLED=${{ secrets.VK_PAY_ENABLED || 'false' }}
           VK_PAY_MERCHANT_ID=${{ secrets.VK_PAY_MERCHANT_ID }}
           VK_PAY_CLIENT_ID=${{ secrets.VK_PAY_CLIENT_ID }}

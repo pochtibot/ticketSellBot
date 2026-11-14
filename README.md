@@ -79,7 +79,7 @@ python -m app.bot.seed
 
 ## Конфигурация
 
-Основные переменные: `DATABASE_URL`, `TELEGRAM_TOKEN`, `VK_TOKEN`, `VK_GROUP_ID`, `MAX_TOKEN`, `ADMIN_TELEGRAM_IDS`, `WEBAPP_URL`, `VK_APP_ID`, `VK_SECRET_KEY`, `VK_TOKEN_ENCRYPTION_KEY` и параметры `VK_PAY_*`. Полный набор и примеры находятся в `.env.*.example`, настройки читаются через [app/config.py](app/config.py).
+Основные переменные: `DATABASE_URL`, `TELEGRAM_TOKEN`, `VK_TOKEN`, `VK_GROUP_ID`, `MAX_TOKEN`, `ADMIN_TELEGRAM_IDS`, `WEBAPP_URL`, `VK_APP_ID`, `VK_SECRET_KEY`, `VK_TOKEN_ENCRYPTION_KEY` и параметры `VK_PAY_*`. Дополнительный OAuth-поток подключения сообществ настраивается через `VK_GROUP_OAUTH_APP_ID`, `VK_GROUP_OAUTH_CLIENT_SECRET` и `VK_GROUP_OAUTH_REDIRECT_URI`; для него требуется отдельное приложение VK типа «Веб-сайт» и зарегистрированный callback URL. Полный набор и примеры находятся в `.env.*.example`, настройки читаются через [app/config.py](app/config.py).
 
 Для локальной разработки `X-Skip-Auth` разрешён только при `ALLOW_SKIP_AUTH=true`; по умолчанию отключён. В production Mini App аутентифицируется подписанными данными Telegram или VK.
 
