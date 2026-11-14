@@ -146,7 +146,10 @@ def test_vk_groups_page_can_install_the_mini_app_into_a_community():
 def test_vk_community_token_uses_supported_bridge_alias_and_valid_scopes():
     assert "function getVKCommunityTokenMethod(bridge)" in APP_JS
     assert '"VKWebAppGetCommunityAuthToken"' in APP_JS
-    assert 'scope: "stories,photos,app_widget,messages,docs,manage"' in APP_JS
+    connect = APP_JS.split("async function connectMyVKGroup(groupId)", 1)[1].split(
+        "async function requestVKCommunityWallToken", 1
+    )[0]
+    assert 'scope: "wall,stories,photos,app_widget,messages,docs,manage"' in connect
 
 
 def test_vk_connected_group_can_refresh_community_token_scopes():
