@@ -9,13 +9,12 @@ import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from html import escape
 from urllib.parse import parse_qs
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 
 from app.config import settings
@@ -76,11 +75,9 @@ from app.web.vk_api import (
     VKAPITransportError,
     send_vk_organizer_announcement_dm,
     send_vk_ticket_dm,
-    vk_api_call,
     vk_wall_post,
     verify_group_token,
 )
-from app.web.vk_group_oauth import build_authorize_url, extract_group_token, make_state, read_state
 from app.web.vk_pay import (
     VK_PAY_NOTIFICATION_VERSION,
     build_notification_ack,
@@ -1355,142 +1352,6 @@ async def list_my_vk_groups(current: CurrentUser = Depends(get_current_user)):
         }
         for g in groups
     ]
-
-
-@router.post("/me/vk-groups/oauth/start")
-async def start_vk_group_oauth(
-    body: dict = Body(...),
-    current: CurrentUser = Depends(get_current_user),
-):
-    """Start server-side OAuth for one community, independent of VK Bridge."""
-    if not all((settings.vk_group_oauth_app_id, settings.vk_group_oauth_client_secret,
-                settings.vk_group_oauth_redirect_uri)):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OAuth для сообществ не настроен: задайте credentials веб-приложения VK и callback URL",
-        )
-
-    raw_group_id = str(body.get("group_id") or "").strip().lstrip("-")
-    if not raw_group_id.isascii() or not raw_group_id.isdigit() or int(raw_group_id) <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите числовой ID сообщества")
-    group_id = str(int(raw_group_id))
-    title = None
-    oauth_secret = settings.vk_group_oauth_client_secret
-    state = make_state(
-        user_id=str(current.user_id),
-        group_id=group_id,
-        title=title,
-        secret=oauth_secret,
-    )
-    return {
-        "authorize_url": build_authorize_url(
-            app_id=settings.vk_group_oauth_app_id,
-            redirect_uri=settings.vk_group_oauth_redirect_uri,
-            group_id=group_id,
-            state=state,
-        )
-    }
-
-
-def _vk_group_oauth_result_page(message: str, *, success: bool = False) -> HTMLResponse:
-    color = "#237a45" if success else "#a52a2a"
-    return HTMLResponse(
-        "<!doctype html><html lang='ru'><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Подключение сообщества</title><body style='font:16px sans-serif;max-width:560px;"
-        f"margin:12vh auto;padding:24px;color:#222'><h2 style='color:{color}'>"
-        f"{escape(message)}</h2><p>Вернитесь в приложение Билетёр. Если оно открыто в другой вкладке,"
-        "обновите список сообществ.</p></body></html>",
-        status_code=200 if success else 400,
-    )
-
-
-@router.get("/me/vk-groups/oauth/callback", response_class=HTMLResponse)
-async def finish_vk_group_oauth(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-):
-    """Exchange VK's one-time code, verify the community binding, and save encrypted token."""
-    oauth_secret = settings.vk_group_oauth_client_secret
-    if not all((settings.vk_group_oauth_app_id, oauth_secret, settings.vk_group_oauth_redirect_uri)):
-        return _vk_group_oauth_result_page("OAuth для сообществ не настроен на сервере")
-    if error or not code or not state:
-        logger.info("VK community OAuth was declined or returned incomplete callback")
-        return _vk_group_oauth_result_page("Авторизация сообщества отменена или VK не вернул код")
-
-    state_data = read_state(state, secret=oauth_secret)
-    if state_data is None:
-        logger.warning("VK community OAuth callback rejected: invalid or expired state")
-        return _vk_group_oauth_result_page("Ссылка авторизации истекла или недействительна. Запустите подключение ещё раз.")
-
-    try:
-        user_id = UUID(state_data["user_id"])
-    except ValueError:
-        return _vk_group_oauth_result_page("Не удалось определить владельца подключения")
-
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(
-                "https://oauth.vk.com/access_token",
-                data={
-                    "client_id": settings.vk_group_oauth_app_id,
-                    "client_secret": oauth_secret,
-                    "redirect_uri": settings.vk_group_oauth_redirect_uri,
-                    "code": code,
-                },
-            )
-            response.raise_for_status()
-            oauth_payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("VK community OAuth code exchange failed: %s", type(exc).__name__)
-        return _vk_group_oauth_result_page("VK не завершил обмен кода на ключ. Попробуйте подключить сообщество ещё раз.")
-
-    if not isinstance(oauth_payload, dict):
-        return _vk_group_oauth_result_page("VK вернул неожиданный ответ при выдаче ключа")
-    community_token = extract_group_token(oauth_payload, state_data["group_id"])
-    if not community_token:
-        logger.warning("VK community OAuth returned no token for requested group %s", state_data["group_id"])
-        return _vk_group_oauth_result_page("VK не выдал ключ для выбранного сообщества")
-
-    if not await verify_group_token(state_data["group_id"], community_token):
-        logger.warning("VK community OAuth token did not validate for group %s", state_data["group_id"])
-        return _vk_group_oauth_result_page("Выданный VK ключ не подтвердился для выбранного сообщества")
-
-    title = state_data["title"]
-    try:
-        group_info = await vk_api_call(
-            "groups.getById", community_token, group_ids=state_data["group_id"]
-        )
-        group_items = group_info.get("groups", []) if isinstance(group_info, dict) else group_info
-        if isinstance(group_items, list) and group_items and isinstance(group_items[0], dict):
-            title = str(group_items[0].get("name") or title or "")[:255] or None
-    except (VKAPIError, VKAPITransportError):
-        pass
-
-    async with async_session_factory() as session:
-        group_svc = VKGroupService(session)
-        try:
-            await group_svc.register_vk_group(
-                owner_user_id=user_id,
-                group_id=state_data["group_id"],
-                title=title,
-                community_token=community_token,
-            )
-            await session.commit()
-        except ValueError:
-            await session.rollback()
-            return _vk_group_oauth_result_page("Это сообщество уже подключено другим организатором")
-
-    logger.info("VK community connected through OAuth", extra={
-        "event_type": "vk_group.oauth_connected",
-        "group_id": state_data["group_id"],
-        "owner_user_id": str(user_id),
-    })
-    return _vk_group_oauth_result_page(
-        f"Сообщество {title or state_data['group_id']} подключено",
-        success=True,
-    )
 
 
 @router.post("/me/vk-wall-post-diagnostics", status_code=status.HTTP_202_ACCEPTED)

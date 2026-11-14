@@ -3066,13 +3066,11 @@ function renderMyVKGroups(groups) {
                     ${linked
                         ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
                             <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${groupId}')">${linked.has_token ? "Обновить права" : "Выдать токен"}</button>
-                            <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroupOAuth('${groupId}')">OAuth</button>
                             <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${groupId}')">Проверить ключ wall</button>
                             <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${groupId}')">Удалить</button>
                         </div>`
                         : `<div style="display:flex;gap:6px;flex-wrap:wrap">
                             <button class="btn btn-sm btn-primary" onclick="connectMyVKGroup('${groupId}')">Подключить</button>
-                            <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroupOAuth('${groupId}')">Подключить через OAuth</button>
                             <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${groupId}')">Проверить ключ wall</button>
                         </div>`}
                 </div>`;
@@ -3100,7 +3098,6 @@ function renderMyVKGroups(groups) {
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroup('${escapeHtml(g.group_id)}')">${g.has_token ? "Обновить права" : "Выдать токен"}</button>
-                        <button class="btn btn-sm btn-secondary" onclick="connectMyVKGroupOAuth('${escapeHtml(g.group_id)}')">OAuth</button>
                         <button class="btn btn-sm btn-secondary" onclick="requestVKCommunityWallToken('${escapeHtml(g.group_id)}')">Проверить ключ wall</button>
                         <button class="btn btn-sm btn-danger" onclick="removeMyVKGroup('${escapeHtml(g.group_id)}')">Удалить</button>
                     </div>
@@ -3464,29 +3461,6 @@ async function connectMyVKGroup(groupId) {
     } catch (e) {
         hideLoading();
         showToast(e.message || "Ошибка подключения сообщества", true);
-    }
-}
-
-async function connectMyVKGroupOAuth(groupId) {
-    const id = String(groupId || "");
-    if (!/^\d+$/.test(id) || Number(id) <= 0) {
-        showToast("Неверный ID сообщества", true);
-        return;
-    }
-    showLoading();
-    try {
-        const result = await api("/api/me/vk-groups/oauth/start", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ group_id: id }),
-        });
-        if (!result?.authorize_url || !result.authorize_url.startsWith("https://oauth.vk.com/authorize?")) {
-            throw new Error("Сервер не вернул ссылку авторизации VK");
-        }
-        window.location.assign(result.authorize_url);
-    } catch (error) {
-        hideLoading();
-        showToast(error?.message || "Не удалось начать подключение через OAuth", true);
     }
 }
 
