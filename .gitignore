@@ -30,6 +30,9 @@ Thumbs.db
 # Deploy secrets (SSH, etc.)
 deploy/.env.ssh
 
+# Local VK wall-post experiment notes
+docs/vk-wall-post-automation-context.md
+
 # Claude Code
 .claude/agents/
 .claude/worktrees/
